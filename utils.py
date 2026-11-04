@@ -1,10 +1,11 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from config import settings
+from constants import SKIP_WORDS
 
 def parse_datetime_maybe(s: str) -> datetime | None:
     s = s.strip()
-    if s.lower() in {"", "skip", "нет", "не", "пропуск"}:
+    if s.lower() in SKIP_WORDS:
         return None
     fmts = ["%Y-%m-%d %H:%M", "%d.%m.%Y %H:%M", "%Y-%m-%d", "%d.%m.%Y"]
     for f in fmts:

@@ -1,13 +1,14 @@
 from typing import Iterable
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from constants import PAGE_SIZE, TEAMS_LIST_LIMIT
 
 def cancel_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="❌ Отмена", callback_data="cancel")
     return kb.as_markup()
 
-def games_list_kb(games: list[tuple[int, str]], page: int = 1, page_size: int = 8) -> InlineKeyboardMarkup:
+def games_list_kb(games: list[tuple[int, str]], page: int = 1, page_size: int = PAGE_SIZE) -> InlineKeyboardMarkup:
     total = len(games)
     start = (page - 1) * page_size
     end = start + page_size
@@ -75,7 +76,7 @@ def admin_teams_list_kb(pairs: list[tuple[int, str]], game_id: int) -> InlineKey
     Уже было колонкой; оставляем так.
     """
     kb = InlineKeyboardBuilder()
-    for reg_id, label in pairs[:60]:
+    for reg_id, label in pairs[:TEAMS_LIST_LIMIT]:
         kb.button(text=f"🗑 {label}", callback_data=f"admin:delteam:{reg_id}")
     kb.adjust(1)
     kb.row(

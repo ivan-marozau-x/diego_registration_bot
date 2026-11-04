@@ -3,6 +3,10 @@ from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy import event
 from sqlalchemy.engine import Engine
 from config import settings
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 class Base(DeclarativeBase):
     pass
@@ -18,8 +22,9 @@ def _set_sqlite_pragma(dbapi_connection, connection_record):
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.close()
     except Exception:
-        pass
+        logger.debug("PRAGMA foreign_keys=ON skipped (non-SQLite engine)", exc_info=True)
 
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    logger.info("db installed")

@@ -24,6 +24,11 @@ from keyboards import (
     admin_main_kb, admin_games_kb, admin_game_actions_kb, admin_teams_list_kb
 )
 from utils import parse_datetime_maybe, fmt_dt
+from constants import (
+    STATUS_CONFIRMED, STATUS_WAITLIST, SKIP_WORDS,
+    TEAM_NAME_MIN, TEAM_NAME_MAX,
+    GAME_TITLE_MIN, GAME_TITLE_MAX, TEAMS_LIST_LIMIT,
+)
 
 from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
@@ -61,13 +66,13 @@ async def list_active_games(s: AsyncSession) -> list[Game]:
 async def count_confirmed_teams(s: AsyncSession, game_id: int) -> int:
     q = select(func.count(Registration.id)).where(
         Registration.game_id == game_id,
-        Registration.status == "confirmed"
+        Registration.status == STATUS_CONFIRMED
     )
     return (await s.execute(q)).scalar_one()
 
 
 async def sum_confirmed_people(s: AsyncSession, game_id: int, exclude_reg_id: int | None = None) -> int:
-    conds = [Registration.game_id == game_id, Registration.status == "confirmed"]
+    conds = [Registration.game_id == game_id, Registration.status == STATUS_CONFIRMED]
     if exclude_reg_id is not None:
         conds.append(Registration.id != exclude_reg_id)
     q = select(func.coalesce(func.sum(Registration.players), 0)).where(*conds)
@@ -83,7 +88,7 @@ async def get_game_stats(s: AsyncSession, game_id: int) -> GameStats:
     confirmed_teams = await count_confirmed_teams(s, game_id)
     confirmed_people = await sum_confirmed_people(s, game_id)
     q_wait = select(func.count(Registration.id)).where(
-        Registration.game_id == game_id, Registration.status == "waitlist"
+        Registration.game_id == game_id, Registration.status == STATUS_WAITLIST
     )
     waitlist_teams = (await s.execute(q_wait)).scalar_one()
     return GameStats(confirmed_teams, confirmed_people, waitlist_teams)
@@ -119,7 +124,7 @@ def admin_game_brief(g: Game, stats: GameStats) -> str:
     )
 
 
-async def teams_list_text(s: AsyncSession, game_id: int, limit: int = 60) -> str:
+async def teams_list_text(s: AsyncSession, game_id: int, limit: int = TEAMS_LIST_LIMIT) -> str:
     res = await s.execute(
         select(Registration)
         .where(Registration.game_id == game_id)
@@ -139,7 +144,7 @@ async def teams_list_text(s: AsyncSession, game_id: int, limit: int = 60) -> str
     return "\n".join(lines) + tail
 
 def format_team_row(r: Registration) -> str:
-    mark = "✅" if r.status == "confirmed" else "⌛"
+    mark = "✅" if r.status == STATUS_CONFIRMED else "⌛"
     return f"{r.team_name} — {r.players} чел. {mark}"
 
 def build_teams_view(regs: list[Registration], title: str) -> tuple[str, list[tuple[int, str]]]:
@@ -303,7 +308,7 @@ async def cancel_any(cq: CallbackQuery, state: FSMContext):
 @user_r.message(RegisterFlow.entering_team_name)
 async def team_name_step(m: Message, state: FSMContext):
     name = (m.text or "").strip()
-    if not (2 <= len(name) <= 40):
+    if not (TEAM_NAME_MIN <= len(name) <= TEAM_NAME_MAX):
         await m.answer("Название команды должно быть 2–40 символов. Попробуй снова:")
         return
     data = await state.get_data()
@@ -353,7 +358,7 @@ async def players_step(m: Message, state: FSMContext):
             await m.answer("Число превышает допустимый предел для одной команды. Введите меньшее число:")
             return
 
-        status = "confirmed"
+        status = STATUS_CONFIRMED
         confirmed_teams = await count_confirmed_teams(s, game_id)
         confirmed_people = await sum_confirmed_people(s, game_id)
 
@@ -361,7 +366,7 @@ async def players_step(m: Message, state: FSMContext):
         people_over = (game.people_capacity is not None) and ((confirmed_people + players) > game.people_capacity)
 
         if teams_over or people_over:
-            status = "waitlist"
+            status = STATUS_WAITLIST
 
         reg = Registration(
             user_id=uid,
@@ -404,7 +409,7 @@ async def edit_name_start(cq: CallbackQuery, state: FSMContext):
 @user_r.message(EditNameFlow.entering_new_name)
 async def edit_name_apply(m: Message, state: FSMContext):
     name = (m.text or "").strip()
-    if not (2 <= len(name) <= 40):
+    if not (TEAM_NAME_MIN <= len(name) <= TEAM_NAME_MAX):
         await m.answer("Имя 2–40 символов. Попробуй ещё раз:")
         return
     data = await state.get_data()
@@ -479,7 +484,7 @@ async def edit_players_apply(m: Message, state: FSMContext):
         teams_over = (game.teams_capacity is not None) and (confirmed_teams > game.teams_capacity)
         people_over = (game.people_capacity is not None) and ((confirmed_people_excl + players) > game.people_capacity)
 
-        reg.status = "waitlist" if (teams_over or people_over) else "confirmed"
+        reg.status = STATUS_WAITLIST if (teams_over or people_over) else STATUS_CONFIRMED
         await s.flush()
     await state.clear()
     await m.answer("Число игроков обновлено.")
@@ -601,7 +606,7 @@ async def admin_add_team_start(cq: CallbackQuery, state: FSMContext):
 @admin_r.message(AdminAddTeamFlow.entering_team_name)
 async def admin_add_team_name(m: Message, state: FSMContext):
     name = (m.text or "").strip()
-    if not (2 <= len(name) <= 80):
+    if not (TEAM_NAME_MIN <= len(name) <= TEAM_NAME_MAX):
         await m.answer("Имя 2–80 символов. Попробуйте снова:")
         return
     await state.update_data(team_name=name)
@@ -642,7 +647,7 @@ async def admin_add_team_players(m: Message, state: FSMContext):
             return
 
         # Решение о статусе (как для обычной регистрации)
-        status = "confirmed"
+        status = STATUS_CONFIRMED
         confirmed_teams = await count_confirmed_teams(s, gid)
         confirmed_people = await sum_confirmed_people(s, gid)
 
@@ -650,7 +655,7 @@ async def admin_add_team_players(m: Message, state: FSMContext):
         people_over = (g.people_capacity is not None) and ((confirmed_people + players) > g.people_capacity)
 
         if teams_over or people_over:
-            status = "waitlist"
+            status = STATUS_WAITLIST
 
         # 🔧 КЛЮЧЕВАЯ ПРАВКА: уникальный отрицательный user_id для админских команд
         admin_uid = await next_admin_user_id(s)
@@ -759,7 +764,7 @@ async def add_game_start(cq: CallbackQuery, state: FSMContext):
 @admin_r.message(AddGameFlow.entering_title)
 async def add_game_title(m: Message, state: FSMContext):
     title = (m.text or "").strip()
-    if not (2 <= len(title) <= 200):
+    if not (GAME_TITLE_MIN <= len(title) <= GAME_TITLE_MAX):
         await m.answer("Название 2–200 символов. Попробуй ещё раз:")
         return
     await state.update_data(title=title)
@@ -778,7 +783,7 @@ async def add_game_when(m: Message, state: FSMContext):
 @admin_r.message(AddGameFlow.entering_location)
 async def add_game_location(m: Message, state: FSMContext):
     loc = (m.text or "").strip()
-    if loc.lower() in {"skip", "пропуск", "нет", "не", ""}:
+    if loc.lower() in SKIP_WORDS:
         loc = None
     await state.update_data(location=loc)
     await state.set_state(AddGameFlow.entering_teams_capacity)
@@ -789,7 +794,7 @@ async def add_game_location(m: Message, state: FSMContext):
 async def add_game_teams_capacity(m: Message, state: FSMContext):
     raw = (m.text or "").strip().lower()
     teams_cap: Optional[int] = None
-    if raw not in {"skip", "пропуск", "нет", "не", ""}:
+    if raw not in SKIP_WORDS:
         try:
             teams_cap = int(raw)
             if teams_cap <= 0:
@@ -807,7 +812,7 @@ async def add_game_teams_capacity(m: Message, state: FSMContext):
 async def add_game_people_capacity(m: Message, state: FSMContext):
     raw = (m.text or "").strip().lower()
     people_cap: Optional[int] = None
-    if raw not in {"skip", "пропуск", "нет", "не", ""}:
+    if raw not in SKIP_WORDS:
         try:
             people_cap = int(raw)
             if people_cap <= 0:
@@ -825,7 +830,7 @@ async def add_game_people_capacity(m: Message, state: FSMContext):
 async def add_game_max_per_team(m: Message, state: FSMContext):
     raw = (m.text or "").strip().lower()
     maxpt: Optional[int] = None
-    if raw not in {"skip", "пропуск", "нет", "не", ""}:
+    if raw not in SKIP_WORDS:
         try:
             maxpt = int(raw)
             if maxpt <= 0:
