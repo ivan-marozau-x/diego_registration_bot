@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv
+venv/
+env/
+scratch.py
+
+# Secrets & env
+.env
+
+# DB
+*.db
+*.sqlite
+*.sqlite3
+export_*.csv
+db-backup-*.json
+
+# Logs
+*.log
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
