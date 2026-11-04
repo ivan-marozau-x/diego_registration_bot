@@ -1,6 +1,11 @@
 import asyncio
+from dataclasses import dataclass
+import logging
+import os
 from contextlib import asynccontextmanager
 from typing import Optional
+
+from aiohttp import web
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.enums import ParseMode
@@ -24,6 +29,7 @@ from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+logger = logging.getLogger(__name__)
 
 # ----------------------------
 # Вспомогательные
@@ -41,6 +47,7 @@ async def session_scope():
             await s.commit()
         except Exception:
             await s.rollback()
+            logger.exception("session_scope failed")
             raise
 
 
@@ -66,21 +73,37 @@ async def sum_confirmed_people(s: AsyncSession, game_id: int, exclude_reg_id: in
     q = select(func.coalesce(func.sum(Registration.players), 0)).where(*conds)
     return (await s.execute(q)).scalar_one()
 
+@dataclass(frozen=True)
+class GameStats:
+    confirmed_teams: int
+    confirmed_people: int
+    waitlist_teams: int
+
+async def get_game_stats(s: AsyncSession, game_id: int) -> GameStats:
+    confirmed_teams = await count_confirmed_teams(s, game_id)
+    confirmed_people = await sum_confirmed_people(s, game_id)
+    q_wait = select(func.count(Registration.id)).where(
+        Registration.game_id == game_id, Registration.status == "waitlist"
+    )
+    waitlist_teams = (await s.execute(q_wait)).scalar_one()
+    return GameStats(confirmed_teams, confirmed_people, waitlist_teams)
+
 
 # Брифы: для пользователя (без лимитов) и для админа (с лимитами)
-def user_game_brief(g: Game, confirmed_teams: int, confirmed_people: int, waitlist_teams: int) -> str:
+def user_game_brief(g: Game, stats: GameStats) -> str:
     when = fmt_dt(g.when)
     loc = g.location or "—"
     return (
         f"<b>{g.title}</b>\n"
         f"📅 {when}\n"
         f"📍 {loc}\n"
-        f"👥 Подтверждённых команд: {confirmed_teams} (WL: {waitlist_teams})\n"
-        f"🧑‍🤝‍🧑 Подтверждённых людей: {confirmed_people}\n"
+        f"👥 Подтверждённых команд: {stats.confirmed_teams}\n" 
+        f"    (Список ожидания: {stats.waitlist_teams})\n"
+        f"🧑‍🤝‍🧑 Подтверждённых людей: {stats.confirmed_people}\n"
     )
 
 
-def admin_game_brief(g: Game, confirmed_teams: int, confirmed_people: int, waitlist_teams: int) -> str:
+def admin_game_brief(g: Game, stats: GameStats) -> str:
     teams_cap = f"{g.teams_capacity}" if g.teams_capacity is not None else "∞"
     people_cap = f"{g.people_capacity}" if g.people_capacity is not None else "∞"
     maxpt = f"{g.max_players_per_team}" if g.max_players_per_team is not None else "∞"
@@ -90,8 +113,9 @@ def admin_game_brief(g: Game, confirmed_teams: int, confirmed_people: int, waitl
         f"<b>{g.title}</b>\n"
         f"📅 {when}\n"
         f"📍 {loc}\n"
-        f"👥 Команд: {confirmed_teams} / {teams_cap} (WL: {waitlist_teams})\n"
-        f"🧑‍🤝‍🧑 Людей: {confirmed_people} / {people_cap} | Макс/команду: {maxpt}\n"
+        f"👥 Команд: {stats.confirmed_teams} / {teams_cap}/n" 
+        f"    (Список ожидания: {stats.waitlist_teams})\n"
+        f"🧑‍🤝‍🧑 Людей: {stats.confirmed_people} / {people_cap} | Макс/команду: {maxpt}\n"
     )
 
 
@@ -107,13 +131,36 @@ async def teams_list_text(s: AsyncSession, game_id: int, limit: int = 60) -> str
         return "Пока нет зарегистрированных команд."
     lines = []
     for i, r in enumerate(regs, start=1):
-        mark = "✅" if r.status == "confirmed" else "⌛"
-        lines.append(f"{i}. {r.team_name} — {r.players} чел. {mark}")
+        lines.append(f"{i}. {format_team_row(r)}")
     cnt_all = (await s.execute(
         select(func.count(Registration.id)).where(Registration.game_id == game_id)
     )).scalar_one()
     tail = f"\n… и ещё {cnt_all - len(regs)} команд(ы)." if cnt_all > len(regs) else ""
     return "\n".join(lines) + tail
+
+def format_team_row(r: Registration) -> str:
+    mark = "✅" if r.status == "confirmed" else "⌛"
+    return f"{r.team_name} — {r.players} чел. {mark}"
+
+def build_teams_view(regs: list[Registration], title: str) -> tuple[str, list[tuple[int, str]]]:
+    lines: list[str] = [f"<b>{title}</b> — список команд:"]
+    pairs: list[tuple[int, str]] = []
+    for i, r in enumerate(regs, start=1):
+        row = format_team_row(r)
+        lines.append(f"{i}. {row}")
+        pairs.append(r.id, f"#{i} {row}")
+    return "\n".join(lines), pairs
+
+async def _load_teams_for_admin(gid: int) -> tuple[Game | None, list[Registration]]:
+    async with session_scope() as s:
+        g = await s.get(Game, gid)
+        if not g:
+            return None, []
+        res = await s.execute(
+            select(Registration)
+            .where(Registration.game_id == gid)
+            .order_by(Registration.status.asc(), Registration.created_at.asc())
+        )
 
 
 async def next_admin_user_id(s: AsyncSession) -> int:
@@ -127,6 +174,30 @@ async def next_admin_user_id(s: AsyncSession) -> int:
     if min_uid is None or min_uid >= 0:
         return -1
     return min_uid - 1
+
+async def _health(request: web.Request) -> web.Response:
+    return web.Response(text="OK")
+
+
+async def start_health_server() -> web.AppRunner:
+    """
+    Минимальный HTTP-сервер, чтобы Render увидел открытый порт
+    и не убивал деплой как Web Service. Заодно годится как endpoint
+    для cron-пинга, чтобы бот не засыпал.
+    """
+    app = web.Application()
+    app.router.add_get("/", _health)
+    app.router.add_get("/health", _health)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+
+    port = int(os.environ.get("PORT", "10000"))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+
+    logger.info("health server listening on 0.0.0.0:%s", port)
+    return runner
 
 
 # ----------------------------
@@ -177,13 +248,8 @@ async def my_regs(cq: CallbackQuery):
             return
 
         for reg, game in rows:
-            confirmed_teams = await count_confirmed_teams(s, game.id)
-            confirmed_people = await sum_confirmed_people(s, game.id)
-            q_wait = select(func.count(Registration.id)).where(
-                Registration.game_id == game.id, Registration.status == "waitlist"
-            )
-            waitlist_teams = (await s.execute(q_wait)).scalar_one()
-            brief = user_game_brief(game, confirmed_teams, confirmed_people, waitlist_teams)
+            stats = await get_game_stats(s, game.id)
+            brief = user_game_brief(game, stats)
             teams_text = await teams_list_text(s, game.id, limit=60)
 
             text = (
@@ -218,11 +284,8 @@ async def choose_game(cq: CallbackQuery, state: FSMContext):
 
     async with session_scope() as s:
         g = await s.get(Game, game_id)
-        confirmed_teams = await count_confirmed_teams(s, game_id)
-        confirmed_people = await sum_confirmed_people(s, game_id)
-        q_wait = select(func.count(Registration.id)).where(Registration.game_id == game_id, Registration.status == "waitlist")
-        waitlist_teams = (await s.execute(q_wait)).scalar_one()
-        brief = user_game_brief(g, confirmed_teams, confirmed_people, waitlist_teams)
+        stats = await get_game_stats(s, game_id)
+        brief = user_game_brief(g, stats)
         teams_text = await teams_list_text(s, game_id, limit=60)
 
     await cq.message.answer(brief + "\n<b>Уже зарегистрированы:</b>\n" + teams_text, parse_mode=ParseMode.HTML)
@@ -481,11 +544,8 @@ async def admin_game_open(cq: CallbackQuery):
         if not g:
             await cq.answer("Игра не найдена", show_alert=True)
             return
-        c_teams = await count_confirmed_teams(s, gid)
-        c_people = await sum_confirmed_people(s, gid)
-        q_wait = select(func.count(Registration.id)).where(Registration.game_id == gid, Registration.status == "waitlist")
-        w_teams = (await s.execute(q_wait)).scalar_one()
-        text = admin_game_brief(g, c_teams, c_people, w_teams)
+        stats = await get_game_stats(s, gid)
+        text = admin_game_brief(g, stats)
         active = g.is_active
     await cq.message.edit_text(text, reply_markup=admin_game_actions_kb(gid, active), parse_mode=ParseMode.HTML)
     await cq.answer()
@@ -502,11 +562,8 @@ async def admin_toggle_game(cq: CallbackQuery):
             await cq.answer("Не найдено", show_alert=True); return
         g.is_active = not g.is_active
         await s.flush()
-        c_teams = await count_confirmed_teams(s, gid)
-        c_people = await sum_confirmed_people(s, gid)
-        q_wait = select(func.count(Registration.id)).where(Registration.game_id == gid, Registration.status == "waitlist")
-        w_teams = (await s.execute(q_wait)).scalar_one()
-        text = admin_game_brief(g, c_teams, c_people, w_teams)
+        stats = await get_game_stats(s, gid)
+        text = admin_game_brief(g, stats)
         active = g.is_active
     await cq.message.edit_text(text, reply_markup=admin_game_actions_kb(gid, active), parse_mode=ParseMode.HTML)
     await cq.answer("Готово")
@@ -517,27 +574,16 @@ async def admin_show_teams(cq: CallbackQuery):
     if not is_admin(cq.from_user.id):
         return
     gid = int(cq.data.split(":")[2])
-    async with session_scope() as s:
-        res = await s.execute(
-            select(Registration).where(Registration.game_id == gid).order_by(Registration.status.asc(), Registration.created_at.asc())
-        )
-        regs = list(res.scalars())
-        g = await s.get(Game, gid)
+    g, regs = await _load_teams_for_admin(gid)
     if not g:
         await cq.answer("Игра не найдена", show_alert=True); return
     if not regs:
         await cq.message.answer("Нет регистраций на эту игру.")
         await cq.answer(); return
 
-    pairs = []
-    lines = [f"<b>{g.title}</b> — список команд:"]
-    for i, r in enumerate(regs, start=1):
-        mark = "✅" if r.status == "confirmed" else "⌛"
-        label = f"#{i} {r.team_name} — {r.players} чел. {mark}"
-        pairs.append((r.id, label))
-        lines.append(f"{i}. {r.team_name} — {r.players} чел. {mark}")
+    text, pairs = build_teams_view(regs, g.title)
 
-    await cq.message.answer("\n".join(lines), reply_markup=admin_teams_list_kb(pairs, gid), parse_mode=ParseMode.HTML)
+    await cq.message.answer(text, reply_markup=admin_teams_list_kb(pairs, gid), parse_mode=ParseMode.HTML)
     await cq.answer()
 
 
@@ -641,12 +687,7 @@ async def admin_delete_team(cq: CallbackQuery):
         await s.delete(reg)
     await cq.answer("Удалено")
 
-    async with session_scope() as s:
-        g = await s.get(Game, gid)
-        res = await s.execute(
-            select(Registration).where(Registration.game_id == gid).order_by(Registration.status.asc(), Registration.created_at.asc())
-        )
-        regs = list(res.scalars())
+    g, regs = await _load_teams_for_admin(gid)
     if not g:
         await cq.message.answer("Игра не найдена.")
         return
@@ -654,15 +695,9 @@ async def admin_delete_team(cq: CallbackQuery):
         await cq.message.answer("Список команд пуст.")
         return
 
-    pairs = []
-    lines = [f"<b>{g.title}</b> — список команд:"]
-    for i, r in enumerate(regs, start=1):
-        mark = "✅" if r.status == "confirmed" else "⌛"
-        label = f"#{i} {r.team_name} — {r.players} чел. {mark}"
-        pairs.append((r.id, label))
-        lines.append(f"{i}. {r.team_name} — {r.players} чел. {mark}")
+    text, pairs = build_teams_view(regs, g.title)
 
-    await cq.message.answer("\n".join(lines), reply_markup=admin_teams_list_kb(pairs, gid), parse_mode=ParseMode.HTML)
+    await cq.message.answer(text, reply_markup=admin_teams_list_kb(pairs, gid), parse_mode=ParseMode.HTML)
 
 
 @admin_r.callback_query(F.data.startswith("admin:export:"))
@@ -825,12 +860,9 @@ async def add_game_confirm(m: Message, state: FSMContext):
         s.add(g)
         await s.flush()
 
-        c_teams = await count_confirmed_teams(s, g.id)
-        c_people = await sum_confirmed_people(s, g.id)
-        q_wait = select(func.count(Registration.id)).where(Registration.game_id == g.id, Registration.status == "waitlist")
-        w_teams = (await s.execute(q_wait)).scalar_one()
+        stats = await get_game_stats(s, g.id)
 
-        await m.answer("Игра добавлена:\n" + admin_game_brief(g, c_teams, c_people, w_teams), parse_mode=ParseMode.HTML)
+        await m.answer("Игра добавлена:\n" + admin_game_brief(g, stats), parse_mode=ParseMode.HTML)
     await state.clear()
 
 
@@ -855,6 +887,13 @@ async def help_cmd(m: Message):
 # ----------------------------
 
 async def main():
+    logging.basicConfig(
+        level=logging.INFO, 
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        force=True,
+        )
+    logger.info("starting bot")
+
     await init_db()
     dp = Dispatcher(storage=MemoryStorage())
 
@@ -865,9 +904,18 @@ async def main():
         token=settings.bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML)
     )
-    print("Bot is running...")
-    await bot.delete_webhook(drop_pending_updates=True)
-    await dp.start_polling(bot)
+
+    # 1) Открываем HTTP-порт для Render (иначе деплой упадёт с "Timed Out")
+    runner = await start_health_server()
+
+    # 2) Запускаем polling
+    logger.info("bot is running (polling)")
+    try:
+        await bot.delete_webhook(drop_pending_updates=True)
+        await dp.start_polling(bot)
+    finally:
+        await runner.cleanup()
+        logger.info("bot stopped")
 
 
 if __name__ == "__main__":
