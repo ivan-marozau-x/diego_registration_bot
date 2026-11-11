@@ -153,7 +153,7 @@ def build_teams_view(regs: list[Registration], title: str) -> tuple[str, list[tu
     for i, r in enumerate(regs, start=1):
         row = format_team_row(r)
         lines.append(f"{i}. {row}")
-        pairs.append(r.id, f"#{i} {row}")
+        pairs.append((r.id, f"#{i} {row}"))
     return "\n".join(lines), pairs
 
 async def _load_teams_for_admin(gid: int) -> tuple[Game | None, list[Registration]]:
