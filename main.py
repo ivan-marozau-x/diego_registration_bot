@@ -118,7 +118,7 @@ def admin_game_brief(g: Game, stats: GameStats) -> str:
         f"<b>{g.title}</b>\n"
         f"📅 {when}\n"
         f"📍 {loc}\n"
-        f"👥 Команд: {stats.confirmed_teams} / {teams_cap}/n" 
+        f"👥 Команд: {stats.confirmed_teams} / {teams_cap}\n" 
         f"    (Список ожидания: {stats.waitlist_teams})\n"
         f"🧑‍🤝‍🧑 Людей: {stats.confirmed_people} / {people_cap} | Макс/команду: {maxpt}\n"
     )
@@ -166,6 +166,7 @@ async def _load_teams_for_admin(gid: int) -> tuple[Game | None, list[Registratio
             .where(Registration.game_id == gid)
             .order_by(Registration.status.asc(), Registration.created_at.asc())
         )
+        return g, list(res.scalars())
 
 
 async def next_admin_user_id(s: AsyncSession) -> int:
