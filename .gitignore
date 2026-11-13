@@ -7,8 +7,7 @@ venv/
 env/
 scratch.py
 .pytest_cache/
-tests/
-pytest.ini
+
 
 # Secrets & env
 .env
