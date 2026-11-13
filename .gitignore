@@ -6,9 +6,15 @@ __pycache__/
 venv/
 env/
 scratch.py
+.pytest_cache/
+tests/
+pytest.ini
 
 # Secrets & env
 .env
+.env.dev
+backups/*.csv
+
 
 # DB
 *.db
