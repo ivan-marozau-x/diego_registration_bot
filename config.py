@@ -60,7 +60,7 @@ def load_settings(env_path: str | Path | None = None) -> Settings:
         bot_token=raw_token.strip(),
         admin_ids=_parse_admin_ids(os.environ.get("ADMIN_IDS")),
         database_url=os.environ.get("DATABASE_URL", DEFAULT_DB_URL).strip(),
-        tz=os.environ.get("TZ", DEFAULT_TZ).strip(),
+        tz=os.environ.get("BOT_TZ", DEFAULT_TZ).strip(),
         )
 
 settings = load_settings()

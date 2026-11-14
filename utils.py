@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from config import settings
 from constants import SKIP_WORDS
@@ -23,6 +23,8 @@ def fmt_dt(dt: datetime | None) -> str:
     if not dt:
         return "—"
     try:
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(ZoneInfo(settings.tz))
         return dt.strftime("%d.%m.%Y %H:%M")
     except Exception:
         return str(dt)
