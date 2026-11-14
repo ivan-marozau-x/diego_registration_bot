@@ -20,7 +20,7 @@ class Settings:
         if not self.bot_token or not self.bot_token.strip():
             raise ValueError("BOT_TOKEN should not be empty")
         if not self.database_url or not self.database_url.strip():
-            raise ValueError("BASE_URL should not be empty")
+            raise ValueError("DATABASE_URL should not be empty")
         try:
             ZoneInfo(self.tz)
         except ZoneInfoNotFoundError as exc:

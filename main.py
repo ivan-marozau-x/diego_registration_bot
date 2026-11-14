@@ -173,7 +173,8 @@ async def teams_list_text(s: AsyncSession, game_id: int, limit: int = TEAMS_LIST
         return "Пока нет зарегистрированных команд."
     lines = []
     for i, r in enumerate(regs, start=1):
-        lines.append(f"{i}. {format_team_row(r)}")
+        row = format_team_row(r)
+        lines.append(f"{i}. {esc(row)}")
     cnt_all = (await s.execute(
         select(func.count(Registration.id)).where(Registration.game_id == game_id)
     )).scalar_one()
@@ -182,14 +183,14 @@ async def teams_list_text(s: AsyncSession, game_id: int, limit: int = TEAMS_LIST
 
 def format_team_row(r: Registration) -> str:
     mark = "✅" if r.status == STATUS_CONFIRMED else "⌛"
-    return f"{esc(r.team_name)} — {r.players} чел. {mark}"
+    return f"{r.team_name} — {r.players} чел. {mark}"
 
 def build_teams_view(regs: list[Registration], title: str) -> tuple[str, list[tuple[int, str]]]:
-    lines: list[str] = [f"<b>{title}</b> — список команд:"]
+    lines: list[str] = [f"<b>{esc(title)}</b> — список команд:"]
     pairs: list[tuple[int, str]] = []
     for i, r in enumerate(regs, start=1):
         row = format_team_row(r)
-        lines.append(f"{i}. {row}")
+        lines.append(f"{i}. {esc(row)}")
         pairs.append((r.id, f"#{i} {row}"))
     return "\n".join(lines), pairs
 
@@ -329,7 +330,7 @@ async def choose_game(cq: CallbackQuery, state: FSMContext):
         teams_text = await teams_list_text(s, game_id, limit=60)
 
     await cq.message.answer(brief + "\n<b>Уже зарегистрированы:</b>\n" + teams_text, parse_mode=ParseMode.HTML)
-    await cq.message.answer("Теперь введи <b>название команды</b> (2–40 символов):", reply_markup=cancel_kb(), parse_mode=ParseMode.HTML)
+    await cq.message.answer(f"Теперь введи <b>название команды</b> ({TEAM_NAME_MIN}–{TEAM_NAME_MAX} символов):", reply_markup=cancel_kb(), parse_mode=ParseMode.HTML)
     await cq.answer()
 
 
@@ -344,7 +345,7 @@ async def cancel_any(cq: CallbackQuery, state: FSMContext):
 async def team_name_step(m: Message, state: FSMContext):
     name = (m.text or "").strip()
     if not (TEAM_NAME_MIN <= len(name) <= TEAM_NAME_MAX):
-        await m.answer("Название команды должно быть 2–40 символов. Попробуй снова:")
+        await m.answer(f"Название команды должно быть {TEAM_NAME_MIN}–{TEAM_NAME_MAX} символов. Попробуй снова:")
         return
     data = await state.get_data()
     game_id = data["game_id"]
@@ -421,9 +422,9 @@ async def players_step(m: Message, state: FSMContext):
         await state.clear()
         await m.answer(
             f"✅ Регистрация создана!\n\n"
-            f"Игра: <b>{game.title}</b>\n"
+            f"Игра: <b>{esc(game.title)}</b>\n"
             f"Когда: {fmt_dt(game.when)} | Где: {game.location or '—'}\n"
-            f"Команда: <b>{team_name}</b>\n"
+            f"Команда: <b>{esc(team_name)}</b>\n"
             f"Игроков: <b>{players}</b>\n"
             f"Статус: <b>{status}</b>",
             parse_mode=ParseMode.HTML
@@ -437,7 +438,7 @@ async def edit_name_start(cq: CallbackQuery, state: FSMContext):
     reg_id = int(cq.data.split(":")[1])
     await state.set_state(EditNameFlow.entering_new_name)
     await state.update_data(reg_id=reg_id)
-    await cq.message.answer("Введи новое имя команды (2–40 символов):", reply_markup=cancel_kb())
+    await cq.message.answer(f"Введи новое имя команды ({TEAM_NAME_MIN}–{TEAM_NAME_MAX} символов):", reply_markup=cancel_kb())
     await cq.answer()
 
 
@@ -445,7 +446,7 @@ async def edit_name_start(cq: CallbackQuery, state: FSMContext):
 async def edit_name_apply(m: Message, state: FSMContext):
     name = (m.text or "").strip()
     if not (TEAM_NAME_MIN <= len(name) <= TEAM_NAME_MAX):
-        await m.answer("Имя 2–40 символов. Попробуй ещё раз:")
+        await m.answer(f"Имя {TEAM_NAME_MIN}–{TEAM_NAME_MAX} символов. Попробуй ещё раз:")
         return
     data = await state.get_data()
     reg_id = data["reg_id"]
@@ -636,7 +637,7 @@ async def admin_add_team_start(cq: CallbackQuery, state: FSMContext):
 async def admin_add_team_name(m: Message, state: FSMContext):
     name = (m.text or "").strip()
     if not (TEAM_NAME_MIN <= len(name) <= TEAM_NAME_MAX):
-        await m.answer("Имя 2–80 символов. Попробуйте снова:")
+        await m.answer(f"Имя {TEAM_NAME_MIN}–{TEAM_NAME_MAX}  символов. Попробуйте снова:")
         return
     await state.update_data(team_name=name)
     await state.set_state(AdminAddTeamFlow.entering_players)
@@ -757,7 +758,7 @@ async def admin_export_csv(cq: CallbackQuery):
     } for r in regs])
     filename = f"export_game_{gid}.csv"
     df.to_csv(filename, index=False)
-    await cq.message.answer_document(document=FSInputFile(filename), caption=f"Экспорт по игре: {g.title}")
+    await cq.message.answer_document(document=FSInputFile(filename), caption=f"Экспорт по игре: {esc(g.title)}")
     await cq.answer("Экспорт готов")
 
 
