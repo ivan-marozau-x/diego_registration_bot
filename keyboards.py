@@ -8,7 +8,12 @@ def cancel_kb() -> InlineKeyboardMarkup:
     kb.button(text="❌ Отмена", callback_data="cancel")
     return kb.as_markup()
 
-def games_list_kb(games: list[tuple[int, str]], page: int = 1, page_size: int = PAGE_SIZE) -> InlineKeyboardMarkup:
+def games_list_kb(
+        games: list[tuple[int, str]], 
+        page: int = 1,
+        page_size: int = PAGE_SIZE, 
+        is_admin: bool = False,
+        ) -> InlineKeyboardMarkup:
     total = len(games)
     start = (page - 1) * page_size
     end = start + page_size
@@ -27,6 +32,15 @@ def games_list_kb(games: list[tuple[int, str]], page: int = 1, page_size: int = 
     nav_btns.append(InlineKeyboardButton(text="🗂 Мои регистрации", callback_data="my_regs"))
 
     kb.row(*nav_btns)
+
+    if is_admin:
+        kb.row(InlineKeyboardButton(text="⚙️ Вернуться в админку", callback_data="admin:back"))
+
+    return kb.as_markup()
+
+def admin_back_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="⚙️ Вернуться в админку", callback_data="admin:back")
     return kb.as_markup()
 
 def reg_manage_kb(reg_id: int) -> InlineKeyboardMarkup:
@@ -43,6 +57,7 @@ def admin_main_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="➕ Добавить игру", callback_data="admin:add_game")
     kb.button(text="📋 Список игр", callback_data="admin:list_games")
+    kb.button(text="👤 Интерфейс пользователя", callback_data="admin:user_view")
     kb.adjust(1)
     return kb.as_markup()
 

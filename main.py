@@ -21,7 +21,8 @@ from models import Game, Registration
 from states import RegisterFlow, EditNameFlow, EditPlayersFlow, AddGameFlow, AdminAddTeamFlow
 from keyboards import (
     games_list_kb, reg_manage_kb, cancel_kb,
-    admin_main_kb, admin_games_kb, admin_game_actions_kb, admin_teams_list_kb
+    admin_main_kb, admin_games_kb, admin_game_actions_kb, admin_teams_list_kb,
+    admin_back_kb,
 )
 from utils import parse_datetime_maybe, fmt_dt
 from constants import (
@@ -61,6 +62,42 @@ async def list_active_games(s: AsyncSession) -> list[Game]:
         select(Game).where(Game.is_active == True).order_by(Game.when.is_(None), Game.when.asc(), Game.id.desc())
     )
     return list(res.scalars())
+
+async def _get_active_games_data(s: AsyncSession) -> list[tuple[int, str]]:
+    games = await list_active_games(s)
+    return [(g.id, f"{g.title} ({fmt_dt(g.when)})" if g.when else g.title) for g in games]
+
+
+async def _show_admin_home(target: Message, edit: bool = False):
+    text = "Панель администратора"
+    kb = admin_main_kb()
+    if edit:
+        await target.edit_text(text, reply_markup=kb)
+    else:
+        await target.answer(text, reply_markup=kb)
+
+
+async def _show_user_home(target: Message, user_id: int, edit: bool = False):
+    async with session_scope() as s:
+        data = await _get_active_games_data(s)
+
+    admin_flag = is_admin(user_id)
+    if not data:
+        text = "Привет! Пока нет открытых игр для регистрации. Загляни позже."
+        kb = admin_back_kb() if admin_flag else None
+        if edit:
+            await target.edit_text(text, reply_markup=kb)
+        else:
+            await target.answer(text, reply_markup=kb)
+        return
+
+    text = "Выбери игру для регистрации:"
+    kb = games_list_kb(data, page=1, is_admin=admin_flag)
+    if edit:
+        await target.edit_text(text, reply_markup=kb)
+    else:
+        await target.answer(text, reply_markup=kb)
+
 
 
 async def count_confirmed_teams(s: AsyncSession, game_id: int) -> int:
@@ -216,13 +253,10 @@ user_r = Router()
 @user_r.message(CommandStart())
 async def start(m: Message, state: FSMContext):
     await state.clear()
-    async with session_scope() as s:
-        games = await list_active_games(s)
-        if not games:
-            await m.answer("Привет! Пока нет открытых игр для регистрации. Загляни позже.")
-            return
-        data = [(g.id, f"{g.title} ({fmt_dt(g.when)})" if g.when else g.title) for g in games]
-        await m.answer("Выбери игру для регистрации:", reply_markup=games_list_kb(data, page=1))
+    if is_admin(m.from_user.id):
+        await _show_admin_home(m)
+    else:
+        await _show_user_home(m, m.from_user.id)
 
 
 @user_r.message(Command("whoami"))
@@ -234,9 +268,9 @@ async def whoami(m: Message):
 async def paginate_games(cq: CallbackQuery):
     page = int(cq.data.split(":")[1])
     async with session_scope() as s:
-        games = await list_active_games(s)
-        data = [(g.id, f"{g.title} ({fmt_dt(g.when)})" if g.when else g.title) for g in games]
-        await cq.message.edit_reply_markup(reply_markup=games_list_kb(data, page=page))
+        data = await _get_active_games_data(s)
+    kb = games_list_kb(data, page=page, is_admin=is_admin(cq.from_user.id))
+    await cq.message.edit_reply_markup(reply_markup=kb)
     await cq.answer()
 
 
@@ -510,27 +544,29 @@ async def delete_registration(cq: CallbackQuery):
 # ----------------------------
 
 admin_r = Router()
+admin_r.message.filter(lambda m: m.from_user is not None and is_admin(m.from_user.id))
+admin_r.callback_query.filter(lambda cq: cq.from_user is not None and is_admin(cq.from_user.id))
 
 
 @admin_r.message(Command("admin"))
-async def admin_home(m: Message):
-    if not is_admin(m.from_user.id):
-        return
-    await m.answer("Панель администратора:", reply_markup=admin_main_kb())
-
+async def admin_home(m: Message, state: FSMContext):
+    await state.clear()
+    await _show_admin_home(m)
 
 @admin_r.callback_query(F.data == "admin:back")
-async def admin_back(cq: CallbackQuery):
-    if not is_admin(cq.from_user.id):
-        return
-    await cq.message.edit_text("Панель администратора:", reply_markup=admin_main_kb())
+async def admin_back(cq: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await _show_admin_home(cq.message, edit=True)
     await cq.answer()
 
+@admin_r.callback_query(F.data == "admin:user_view")
+async def admin_user_view(cq: CallbackQuery, state: FSMContext):
+    await state.clear()
+    await _show_user_home(cq.message, cq.from_user.id, edit=True)
+    await cq.answer()
 
 @admin_r.callback_query(F.data == "admin:list_games")
 async def admin_list_games(cq: CallbackQuery):
-    if not is_admin(cq.from_user.id):
-        return
     async with session_scope() as s:
         res = await s.execute(select(Game).order_by(Game.id.desc()))
         games = list(res.scalars())
@@ -542,8 +578,6 @@ async def admin_list_games(cq: CallbackQuery):
 
 @admin_r.callback_query(F.data.startswith("admin:game:"))
 async def admin_game_open(cq: CallbackQuery):
-    if not is_admin(cq.from_user.id):
-        return
     gid = int(cq.data.split(":")[2])
     async with session_scope() as s:
         g = await s.get(Game, gid)
@@ -559,8 +593,6 @@ async def admin_game_open(cq: CallbackQuery):
 
 @admin_r.callback_query(F.data.startswith("admin:toggle:"))
 async def admin_toggle_game(cq: CallbackQuery):
-    if not is_admin(cq.from_user.id):
-        return
     gid = int(cq.data.split(":")[2])
     async with session_scope() as s:
         g = await s.get(Game, gid)
@@ -577,8 +609,6 @@ async def admin_toggle_game(cq: CallbackQuery):
 
 @admin_r.callback_query(F.data.startswith("admin:teams:"))
 async def admin_show_teams(cq: CallbackQuery):
-    if not is_admin(cq.from_user.id):
-        return
     gid = int(cq.data.split(":")[2])
     g, regs = await _load_teams_for_admin(gid)
     if not g:
@@ -595,8 +625,6 @@ async def admin_show_teams(cq: CallbackQuery):
 
 @admin_r.callback_query(F.data.startswith("admin:add_team:"))
 async def admin_add_team_start(cq: CallbackQuery, state: FSMContext):
-    if not is_admin(cq.from_user.id):
-        return
     gid = int(cq.data.split(":")[2])
     await state.set_state(AdminAddTeamFlow.entering_team_name)
     await state.update_data(game_id=gid)
@@ -682,8 +710,6 @@ async def admin_add_team_players(m: Message, state: FSMContext):
 
 @admin_r.callback_query(F.data.startswith("admin:delteam:"))
 async def admin_delete_team(cq: CallbackQuery):
-    if not is_admin(cq.from_user.id):
-        return
     reg_id = int(cq.data.split(":")[2])
     async with session_scope() as s:
         reg = await s.get(Registration, reg_id)
@@ -708,8 +734,6 @@ async def admin_delete_team(cq: CallbackQuery):
 
 @admin_r.callback_query(F.data.startswith("admin:export:"))
 async def admin_export_csv(cq: CallbackQuery):
-    if not is_admin(cq.from_user.id):
-        return
     import pandas as pd
     gid = int(cq.data.split(":")[2])
     async with session_scope() as s:
@@ -739,8 +763,6 @@ async def admin_export_csv(cq: CallbackQuery):
 
 @admin_r.callback_query(F.data.startswith("admin:delete:"))
 async def admin_delete_game(cq: CallbackQuery):
-    if not is_admin(cq.from_user.id):
-        return
     gid = int(cq.data.split(":")[2])
     async with session_scope() as s:
         g = await s.get(Game, gid)
@@ -755,8 +777,6 @@ async def admin_delete_game(cq: CallbackQuery):
 
 @admin_r.callback_query(F.data == "admin:add_game")
 async def add_game_start(cq: CallbackQuery, state: FSMContext):
-    if not is_admin(cq.from_user.id):
-        return
     await state.set_state(AddGameFlow.entering_title)
     await cq.message.answer("Введи <b>название</b> игры:", parse_mode=ParseMode.HTML, reply_markup=cancel_kb())
     await cq.answer()
@@ -880,12 +900,14 @@ async def add_game_confirm(m: Message, state: FSMContext):
 async def help_cmd(m: Message):
     text = (
         "Что я умею:\n"
-        "• /start — выбрать игру и зарегистрировать команду\n"
+        "• /start — главное меню (для игроков — выбор игры, для админов — панель управления)\n"
         "• /whoami — показать твой user_id\n"
         "• Мои регистрации — изменить имя/кол-во игроков или удалить (показывает список команд на игре)\n"
-        "• Админам: /admin — управление играми (лимиты задаются при создании; можно добавлять/удалять команды)\n"
     )
+    if is_admin(m.from_user.id):
+        text += "• /admin — вернуться в панель администратора\n"
     await m.answer(text)
+
 
 
 # ----------------------------
