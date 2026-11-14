@@ -1,7 +1,7 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy import Integer, String, DateTime, Boolean, ForeignKey, UniqueConstraint
+from sqlalchemy import BigInteger, Integer, String, DateTime, Boolean, ForeignKey, UniqueConstraint
 from db import Base
 
 class Game(Base):
@@ -9,7 +9,7 @@ class Game(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     title: Mapped[str] = mapped_column(String(200), nullable=False)
-    when: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    when: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     location: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
 
     # Лимиты на площадке
@@ -18,7 +18,7 @@ class Game(Base):
     max_players_per_team: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # макс. людей в команде
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
 
     registrations: Mapped[list["Registration"]] = relationship(
         back_populates="game",
@@ -34,13 +34,13 @@ class Registration(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
-    chat_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
     game_id: Mapped[int] = mapped_column(ForeignKey("games.id", ondelete="CASCADE"), nullable=False, index=True)
     team_name: Mapped[str] = mapped_column(String(80), nullable=False)
     players: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String(16), default="confirmed", nullable=False)  # confirmed|waitlist
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False)
 
     game: Mapped["Game"] = relationship(back_populates="registrations")
