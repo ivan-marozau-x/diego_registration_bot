@@ -3,6 +3,14 @@ from zoneinfo import ZoneInfo
 from config import settings
 from constants import SKIP_WORDS
 
+import html
+
+def esc(text: str | None) -> str:
+    """Экранирует HTML-теги для безопасного вывода в Telegram."""
+    if not text:
+        return ""
+    return html.escape(text, quote=False)
+
 def parse_datetime_maybe(s: str) -> datetime | None:
     s = s.strip()
     if s.lower() in SKIP_WORDS:

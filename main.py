@@ -24,7 +24,7 @@ from keyboards import (
     admin_main_kb, admin_games_kb, admin_game_actions_kb, admin_teams_list_kb,
     admin_back_kb,
 )
-from utils import parse_datetime_maybe, fmt_dt
+from utils import parse_datetime_maybe, fmt_dt, esc
 from constants import (
     STATUS_CONFIRMED, STATUS_WAITLIST, SKIP_WORDS,
     TEAM_NAME_MIN, TEAM_NAME_MAX,
@@ -136,9 +136,9 @@ def user_game_brief(g: Game, stats: GameStats) -> str:
     when = fmt_dt(g.when)
     loc = g.location or "—"
     return (
-        f"<b>{g.title}</b>\n"
+        f"<b>{esc(g.title)}</b>\n"
         f"📅 {when}\n"
-        f"📍 {loc}\n"
+        f"📍 {esc(loc)}\n"
         f"👥 Подтверждённых команд: {stats.confirmed_teams}\n" 
         f"    (Список ожидания: {stats.waitlist_teams})\n"
         f"🧑‍🤝‍🧑 Подтверждённых людей: {stats.confirmed_people}\n"
@@ -152,9 +152,9 @@ def admin_game_brief(g: Game, stats: GameStats) -> str:
     when = fmt_dt(g.when)
     loc = g.location or "—"
     return (
-        f"<b>{g.title}</b>\n"
+        f"<b>{esc(g.title)}</b>\n"
         f"📅 {when}\n"
-        f"📍 {loc}\n"
+        f"📍 {esc(loc)}\n"
         f"👥 Команд: {stats.confirmed_teams} / {teams_cap}\n" 
         f"    (Список ожидания: {stats.waitlist_teams})\n"
         f"🧑‍🤝‍🧑 Людей: {stats.confirmed_people} / {people_cap} | Макс/команду: {maxpt}\n"
@@ -182,7 +182,7 @@ async def teams_list_text(s: AsyncSession, game_id: int, limit: int = TEAMS_LIST
 
 def format_team_row(r: Registration) -> str:
     mark = "✅" if r.status == STATUS_CONFIRMED else "⌛"
-    return f"{r.team_name} — {r.players} чел. {mark}"
+    return f"{esc(r.team_name)} — {r.players} чел. {mark}"
 
 def build_teams_view(regs: list[Registration], title: str) -> tuple[str, list[tuple[int, str]]]:
     lines: list[str] = [f"<b>{title}</b> — список команд:"]
@@ -295,7 +295,7 @@ async def my_regs(cq: CallbackQuery):
             text = (
                 f"{brief}"
                 f"<b>Твоя регистрация</b>\n"
-                f"• Команда: <b>{reg.team_name}</b>\n"
+                f"• Команда: <b>{esc(reg.team_name)}</b>\n"
                 f"• Игроков: <b>{reg.players}</b>\n"
                 f"• Статус: <b>{reg.status}</b>\n\n"
                 f"<b>Уже зарегистрированы:</b>\n{teams_text}"
@@ -704,7 +704,7 @@ async def admin_add_team_players(m: Message, state: FSMContext):
             await m.answer("Не удалось сохранить. Попробуйте ещё раз.")
             return
 
-        await m.answer(f"Команда «{name}» добавлена ({players} чел., статус: {status}).")
+        await m.answer(f"Команда «{esc(name)}» добавлена ({players} чел., статус: {status}).")
     await state.clear()
 
 
