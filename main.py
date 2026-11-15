@@ -1,5 +1,6 @@
 import asyncio
 from dataclasses import dataclass
+from datetime import datetime
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -13,10 +14,11 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import Message, CallbackQuery, FSInputFile
+from aiogram.types import BufferedInputFile, Message, CallbackQuery, FSInputFile
 
+from backup_db import generate_backup
 from config import settings
-from db import init_db, SessionLocal
+from db import engine, init_db, SessionLocal
 from models import Game, Registration
 from states import RegisterFlow, EditNameFlow, EditPlayersFlow, AddGameFlow, AdminAddTeamFlow
 from keyboards import (
@@ -559,6 +561,24 @@ async def admin_back(cq: CallbackQuery, state: FSMContext):
     await state.clear()
     await _show_admin_home(cq.message, edit=True)
     await cq.answer()
+
+@admin_r.callback_query(F.data == "admin:backup")
+async def admin_backup_db(cq: CallbackQuery):
+    if not is_admin(cq.from_user.id):
+        return
+    await cq.answer("Генерирую бэкап...")
+    
+    # Генерируем JSON в памяти
+    backup_bytes = await generate_backup(engine)
+    
+    # Отправляем файл
+    filename = f"backup_{datetime.now().strftime('%Y-%m-%d_%H-%M')}.json"
+    document = BufferedInputFile(backup_bytes, filename=filename)
+    
+    await cq.message.answer_document(
+        document, 
+        caption="📦 Слепок базы данных готов."
+    )
 
 @admin_r.callback_query(F.data == "admin:user_view")
 async def admin_user_view(cq: CallbackQuery, state: FSMContext):

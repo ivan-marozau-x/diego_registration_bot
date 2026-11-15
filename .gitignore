@@ -12,7 +12,9 @@ scratch.py
 # Secrets & env
 .env
 .env.dev
+backups/
 backups/*.csv
+backups/*.json
 
 
 # DB
@@ -20,7 +22,7 @@ backups/*.csv
 *.sqlite
 *.sqlite3
 export_*.csv
-db-backup-*.json
+backup-*.json
 
 # Logs
 *.log

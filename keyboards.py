@@ -57,6 +57,7 @@ def admin_main_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="➕ Добавить игру", callback_data="admin:add_game")
     kb.button(text="📋 Список игр", callback_data="admin:list_games")
+    kb.button(text="📦 Бэкап БД (JSON)", callback_data="admin:backup")
     kb.button(text="👤 Интерфейс пользователя", callback_data="admin:user_view")
     kb.adjust(1)
     return kb.as_markup()
