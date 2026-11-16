@@ -9,11 +9,12 @@ from sqlalchemy.exc import IntegrityError
 
 from core import (
     is_admin, session_scope, get_game_stats,
-    count_confirmed_teams, sum_confirmed_people
+    count_confirmed_teams, sum_confirmed_people,
+    get_teams_for_text
 )
 from keyboards import games_list_kb, reg_manage_kb, cancel_kb
 from models import Game, Registration
-from render import user_game_brief, teams_list_text
+from render import user_game_brief, render_teams_list
 from screens import _show_user_home, _show_admin_home, _get_active_games_data
 from states import RegisterFlow, EditNameFlow, EditPlayersFlow
 from utils import esc, fmt_dt
@@ -63,7 +64,8 @@ async def my_regs(cq: CallbackQuery):
         for reg, game in rows:
             stats = await get_game_stats(s, game.id)
             brief = user_game_brief(game, stats)
-            teams_text = await teams_list_text(s, game.id, limit=60)
+            regs, cnt_all = await get_teams_for_text(s, game.id, limit=60)
+            teams_text = render_teams_list(regs, cnt_all)
 
             text = (
                 f"{brief}"
@@ -98,7 +100,8 @@ async def choose_game(cq: CallbackQuery, state: FSMContext):
         g = await s.get(Game, game_id)
         stats = await get_game_stats(s, game_id)
         brief = user_game_brief(g, stats)
-        teams_text = await teams_list_text(s, game_id, limit=60)
+        regs, cnt_all = await get_teams_for_text(s, game.id, limit=60)
+        teams_text = render_teams_list(regs, cnt_all)
 
     await cq.message.answer(brief + "\n<b>Уже зарегистрированы:</b>\n" + teams_text, parse_mode=ParseMode.HTML)
     await cq.message.answer(f"Теперь введи <b>название команды</b> ({TEAM_NAME_MIN}–{TEAM_NAME_MAX} символов):", reply_markup=cancel_kb(), parse_mode=ParseMode.HTML)

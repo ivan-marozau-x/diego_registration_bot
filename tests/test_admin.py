@@ -1,5 +1,5 @@
 import pytest
-from main import _load_teams_for_admin
+from core import _load_teams_for_admin
 
 @pytest.mark.asyncio
 async def test_load_teams_returns_tuple_not_none():

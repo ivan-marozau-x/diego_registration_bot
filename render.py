@@ -47,22 +47,12 @@ def build_teams_view(regs: list[Registration], title: str) -> tuple[str, list[tu
         pairs.append((r.id, f"#{i} {row}"))
     return "\n".join(lines), pairs
 
-async def teams_list_text(s: AsyncSession, game_id: int, limit: int = TEAMS_LIST_LIMIT) -> str:
-    res = await s.execute(
-        select(Registration)
-        .where(Registration.game_id == game_id)
-        .order_by(Registration.status.asc(), Registration.created_at.asc())
-        .limit(limit)
-    )
-    regs = list(res.scalars())
+async def render_teams_list(regs: list[Registration], cnt_all: int) -> str:
     if not regs:
         return "Пока нет зарегистрированных команд."
     lines = []
     for i, r in enumerate(regs, start=1):
         row = format_team_row(r)
         lines.append(f"{i}. {esc(row)}")
-    cnt_all = (await s.execute(
-        select(func.count(Registration.id)).where(Registration.game_id == game_id)
-    )).scalar_one()
     tail = f"\n… и ещё {cnt_all - len(regs)} команд(ы)." if cnt_all > len(regs) else ""
     return "\n".join(lines) + tail

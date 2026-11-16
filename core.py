@@ -79,13 +79,21 @@ async def _load_teams_for_admin(gid: int) -> tuple[Game | None, list[Registratio
 
 
 async def next_admin_user_id(s: AsyncSession) -> int:
-    """
-    Возвращает следующий уникальный отрицательный user_id для админских ручных добавлений:
-    -1, -2, -3, ...
-    Это обходит UNIQUE(game_id, user_id), чтобы можно было добавлять много админских команд на одну игру.
-    """
     q = select(func.min(Registration.user_id))
     min_uid = (await s.execute(q)).scalar_one()
     if min_uid is None or min_uid >= 0:
         return -1
     return min_uid - 1
+
+async def get_teams_for_text(s: AsyncSession, game_id: int, limit: int = TEAMS_LIST_LIMIT):
+    res = await s.execute(
+        select(Registration)
+        .where(Registration.game_id == game_id)
+        .order_by(Registration.status.asc(), Registration.created_at.asc())
+        .limit(limit)
+    )
+    regs = list(res.scalars())
+    cnt_all = (await s.execute(
+        select(func.count(Registration.id)).where(Registration.game_id == game_id)
+    )).scalar_one()
+    return regs, cnt_all
