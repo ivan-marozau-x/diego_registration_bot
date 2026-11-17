@@ -15,7 +15,7 @@ from core import (
 from keyboards import games_list_kb, reg_manage_kb, cancel_kb
 from models import Game, Registration
 from render import user_game_brief, render_teams_list
-from screens import _show_user_home, _show_admin_home, _get_active_games_data
+from screens import show_user_home, show_admin_home, get_active_games_data
 from states import RegisterFlow, EditNameFlow, EditPlayersFlow
 from utils import esc, fmt_dt
 
@@ -31,9 +31,9 @@ user_r = Router()
 async def start(m: Message, state: FSMContext):
     await state.clear()
     if is_admin(m.from_user.id):
-        await _show_admin_home(m)
+        await show_admin_home(m)
     else:
-        await _show_user_home(m, m.from_user.id)
+        await show_user_home(m, m.from_user.id)
 
 @user_r.message(Command("whoami"))
 async def whoami(m: Message):
@@ -43,7 +43,7 @@ async def whoami(m: Message):
 async def paginate_games(cq: CallbackQuery):
     page = int(cq.data.split(":")[1])
     async with session_scope() as s:
-        data = await _get_active_games_data(s)
+        data = await get_active_games_data(s)
     kb = games_list_kb(data, page=page, is_admin=is_admin(cq.from_user.id))
     await cq.message.edit_reply_markup(reply_markup=kb)
     await cq.answer()

@@ -65,7 +65,7 @@ async def list_active_games(s: AsyncSession) -> list[Game]:
     return list(res.scalars())
 
 
-async def _load_teams_for_admin(gid: int) -> tuple[Game | None, list[Registration]]:
+async def load_teams_for_admin(gid: int) -> tuple[Game | None, list[Registration]]:
     async with session_scope() as s:
         g = await s.get(Game, gid)
         if not g:

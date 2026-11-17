@@ -14,7 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from backup_db import generate_backup
 from core import (
     is_admin, session_scope, get_game_stats,
-    _load_teams_for_admin, count_confirmed_teams,
+    load_teams_for_admin, count_confirmed_teams,
     sum_confirmed_people, next_admin_user_id
     )
 from db import engine
@@ -24,7 +24,7 @@ from keyboards import (
     )
 from models import Game, Registration
 from render import admin_game_brief, build_teams_view
-from screens import _show_admin_home, _show_user_home
+from screens import show_admin_home, show_user_home
 from states import AddGameFlow, AdminAddTeamFlow
 from utils import esc, fmt_dt, parse_datetime_maybe
 
@@ -42,12 +42,12 @@ admin_r.callback_query.filter(lambda cq: cq.from_user is not None and is_admin(c
 @admin_r.message(Command("admin"))
 async def admin_home(m: Message, state: FSMContext):
     await state.clear()
-    await _show_admin_home(m)
+    await show_admin_home(m)
 
 @admin_r.callback_query(F.data == "admin:back")
 async def admin_back(cq: CallbackQuery, state: FSMContext):
     await state.clear()
-    await _show_admin_home(cq.message, edit=True)
+    await show_admin_home(cq.message, edit=True)
     await cq.answer()
 
 @admin_r.callback_query(F.data == "admin:backup")
@@ -71,7 +71,7 @@ async def admin_backup_db(cq: CallbackQuery):
 @admin_r.callback_query(F.data == "admin:user_view")
 async def admin_user_view(cq: CallbackQuery, state: FSMContext):
     await state.clear()
-    await _show_user_home(cq.message, cq.from_user.id, edit=True)
+    await show_user_home(cq.message, cq.from_user.id, edit=True)
     await cq.answer()
 
 @admin_r.callback_query(F.data == "admin:list_games")
@@ -119,7 +119,7 @@ async def admin_toggle_game(cq: CallbackQuery):
 @admin_r.callback_query(F.data.startswith("admin:teams:"))
 async def admin_show_teams(cq: CallbackQuery):
     gid = int(cq.data.split(":")[2])
-    g, regs = await _load_teams_for_admin(gid)
+    g, regs = await load_teams_for_admin(gid)
     if not g:
         await cq.answer("Игра не найдена", show_alert=True); return
     if not regs:
@@ -228,7 +228,7 @@ async def admin_delete_team(cq: CallbackQuery):
         await s.delete(reg)
     await cq.answer("Удалено")
 
-    g, regs = await _load_teams_for_admin(gid)
+    g, regs = await load_teams_for_admin(gid)
     if not g:
         await cq.message.answer("Игра не найдена.")
         return

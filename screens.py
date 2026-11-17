@@ -5,7 +5,7 @@ from core import is_admin, list_active_games, session_scope
 from keyboards import admin_main_kb, admin_back_kb, games_list_kb
 from utils import fmt_dt
 
-async def _show_admin_home(target: Message, edit: bool = False):
+async def show_admin_home(target: Message, edit: bool = False):
     text = "Панель администратора"
     kb = admin_main_kb()
     if edit:
@@ -14,9 +14,9 @@ async def _show_admin_home(target: Message, edit: bool = False):
         await target.answer(text, reply_markup=kb)
 
 
-async def _show_user_home(target: Message, user_id: int, edit: bool = False):
+async def show_user_home(target: Message, user_id: int, edit: bool = False):
     async with session_scope() as s:
-        data = await _get_active_games_data(s)
+        data = await get_active_games_data(s)
 
     admin_flag = is_admin(user_id)
     if not data:
@@ -35,6 +35,6 @@ async def _show_user_home(target: Message, user_id: int, edit: bool = False):
     else:
         await target.answer(text, reply_markup=kb)
 
-async def _get_active_games_data(s: AsyncSession) -> list[tuple[int, str]]:
+async def get_active_games_data(s: AsyncSession) -> list[tuple[int, str]]:
     games = await list_active_games(s)
     return [(g.id, f"{g.title} ({fmt_dt(g.when)})" if g.when else g.title) for g in games]

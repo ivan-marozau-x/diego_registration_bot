@@ -1,8 +1,6 @@
 from models import Game, Registration
 from core import GameStats
 from utils import esc, fmt_dt
-from sqlalchemy import select, func
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from constants import STATUS_CONFIRMED, TEAMS_LIST_LIMIT
 
