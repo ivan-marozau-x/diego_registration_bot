@@ -9,6 +9,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 
 from config import settings
 from db import init_db
+from middlewares import CallbackAnswerMiddleware
 
 from routers.user import user_r
 from routers.admin import admin_r
@@ -43,6 +44,7 @@ async def main():
 
     await init_db()
     dp = Dispatcher(storage=MemoryStorage())
+    dp.callback_query.outer_middleware(CallbackAnswerMiddleware())
 
     dp.include_router(user_r)
     dp.include_router(admin_r)
