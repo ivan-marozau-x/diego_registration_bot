@@ -1,12 +1,12 @@
 import base64
-from datetime import date, time, timedelta
+from datetime import date, time, timedelta, datetime, timezone
 from decimal import Decimal
 from enum import Enum
 import json
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from db import Base
@@ -28,12 +28,23 @@ def _json_serial(obj: Any) -> str:
 
 async def generate_backup(engine: AsyncEngine) -> bytes:
     tables_data: dict[str, list[dict[str, Any]]] = {}
+    row_counts: dict[str, int] = {}
 
     async with engine.connect() as conn:
         for table in Base.metadata.sorted_tables:
             result = await conn.execute(select(table))
-            tables_data[table.name] = [dict(row) for row in result.mappings()]
+            rows = [dict(row) for row in result.mappings()]
+            tables_data[table.name] = rows
+            row_counts[table.name] = len(rows)
 
-    payload = {"tables": tables_data}
+    payload = {
+        "meta": {
+            "format" : 1,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "dialect":  engine.dialect.name,
+            "row_counts": row_counts,
+        },
+        "tables": tables_data
+        }
 
     return json.dumps(payload, default=_json_serial, ensure_ascii=False).encode("utf-8")
