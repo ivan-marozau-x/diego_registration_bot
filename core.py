@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
+from datetime import datetime, timezone, timedelta
 
 from config import settings
 from db import SessionLocal
@@ -59,8 +60,14 @@ async def get_game_stats(s: AsyncSession, game_id: int) -> GameStats:
     return GameStats(confirmed_teams, confirmed_people, waitlist_teams)
 
 async def list_active_games(s: AsyncSession) -> list[Game]:
+    now_utc = datetime.now(timezone.utc)
+    cutoff = now_utc - timedelta(hours=3)
+
     res = await s.execute(
-        select(Game).where(Game.is_active == True).order_by(Game.when.is_(None), Game.when.asc(), Game.id.desc())
+        select(Game).where(
+            Game.is_active == True,
+            (Game.when == None) | (Game.when >= cutoff)
+        ).order_by(Game.when.is_(None), Game.when.asc(), Game.id.desc())
     )
     return list(res.scalars())
 

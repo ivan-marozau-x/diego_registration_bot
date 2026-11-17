@@ -4,6 +4,10 @@ from utils import esc, fmt_dt
 
 from constants import STATUS_CONFIRMED, TEAMS_LIST_LIMIT
 
+def status_label(status: str) -> str:
+    mapping = {"confirmed": "✅ Подтверждена", "waitlist": "⌛ Ожидание"}
+    return mapping.get(status, status)
+
 def user_game_brief(g: Game, stats: GameStats) -> str:
     when = fmt_dt(g.when)
     loc = g.location or "—"
@@ -15,7 +19,6 @@ def user_game_brief(g: Game, stats: GameStats) -> str:
         f"    (Список ожидания: {stats.waitlist_teams})\n"
         f"🧑‍🤝‍🧑 Подтверждённых людей: {stats.confirmed_people}\n"
     )
-
 
 def admin_game_brief(g: Game, stats: GameStats) -> str:
     teams_cap = f"{g.teams_capacity}" if g.teams_capacity is not None else "∞"
@@ -45,7 +48,7 @@ def build_teams_view(regs: list[Registration], title: str) -> tuple[str, list[tu
         pairs.append((r.id, f"#{i} {row}"))
     return "\n".join(lines), pairs
 
-async def render_teams_list(regs: list[Registration], cnt_all: int) -> str:
+def render_teams_list(regs: list[Registration], cnt_all: int) -> str:
     if not regs:
         return "Пока нет зарегистрированных команд."
     lines = []

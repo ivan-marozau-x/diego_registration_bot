@@ -14,7 +14,7 @@ from core import (
 )
 from keyboards import games_list_kb, reg_manage_kb, cancel_kb
 from models import Game, Registration
-from render import user_game_brief, render_teams_list
+from render import user_game_brief, render_teams_list, status_label
 from screens import show_user_home, show_admin_home, get_active_games_data
 from states import RegisterFlow, EditNameFlow, EditPlayersFlow
 from utils import esc, fmt_dt
@@ -72,7 +72,7 @@ async def my_regs(cq: CallbackQuery):
                 f"<b>Твоя регистрация</b>\n"
                 f"• Команда: <b>{esc(reg.team_name)}</b>\n"
                 f"• Игроков: <b>{reg.players}</b>\n"
-                f"• Статус: <b>{reg.status}</b>\n\n"
+                f"• Статус: <b>{status_label(reg.status)}</b>\n\n"
                 f"<b>Уже зарегистрированы:</b>\n{teams_text}"
             )
             await cq.message.answer(text, reply_markup=reg_manage_kb(reg.id), parse_mode=ParseMode.HTML)
@@ -200,10 +200,9 @@ async def players_step(m: Message, state: FSMContext):
             f"Когда: {fmt_dt(game.when)} | Где: {esc(game.location) or '—'}\n"
             f"Команда: <b>{esc(team_name)}</b>\n"
             f"Игроков: <b>{players}</b>\n"
-            f"Статус: <b>{status}</b>",
+            f"Статус: <b>{status_label(status)}</b>",
             parse_mode=ParseMode.HTML
         )
-
 
 # --------- Редактирование / удаление регистрации пользователем ----------
 

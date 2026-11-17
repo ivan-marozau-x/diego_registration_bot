@@ -36,3 +36,12 @@ def fmt_dt(dt: datetime | None) -> str:
         return dt.strftime("%d.%m.%Y %H:%M")
     except Exception:
         return str(dt)
+
+
+def to_utc(dt: datetime | None) -> datetime | None:
+    """Приводит дату к UTC. Наивные даты считаются по BOT_TZ."""
+    if not dt:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=ZoneInfo(settings.tz)).astimezone(timezone.utc)
+    return dt.astimezone(timezone.utc)

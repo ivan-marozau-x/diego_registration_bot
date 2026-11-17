@@ -26,7 +26,7 @@ from models import Game, Registration
 from render import admin_game_brief, build_teams_view
 from screens import show_admin_home, show_user_home
 from states import AddGameFlow, AdminAddTeamFlow
-from utils import esc, fmt_dt, parse_datetime_maybe
+from utils import esc, fmt_dt, parse_datetime_maybe, to_utc
 
 from constants import (
     TEAM_NAME_MIN, TEAM_NAME_MAX,
@@ -381,7 +381,8 @@ async def add_game_confirm(m: Message, state: FSMContext):
     active = ans in {"да", "yes", "y", "д", "ага", "включить"}
     data = await state.get_data()
     when_iso = data.get("when")
-    dt = datetime.fromisoformat(when_iso) if when_iso else None
+    dt = to_utc(datetime.fromisoformat(when_iso)) if when_iso else None
+
     async with session_scope() as s:
         g = Game(
             title=data["title"],
