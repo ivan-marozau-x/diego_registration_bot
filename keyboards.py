@@ -100,3 +100,18 @@ def admin_teams_list_kb(pairs: list[tuple[int, str]], game_id: int) -> InlineKey
         InlineKeyboardButton(text="⬅️ Назад", callback_data=f"admin:game:{game_id}")
     )
     return kb.as_markup()
+
+def skip_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="⏭ Пропустить", callback_data="wiz:skip")
+    kb.button(text="❌ Отмена", callback_data="cancel")
+    kb.adjust(2)
+    return kb.as_markup()
+
+def yes_no_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✅ Да", callback_data="wiz:yes")
+    kb.button(text="❌ Нет", callback_data="wiz:no")
+    kb.button(text="❌ Отмена", callback_data="cancel")
+    kb.adjust(2, 1) # Да/Нет в одну строку, Отмена под ними
+    return kb.as_markup()

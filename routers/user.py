@@ -3,6 +3,7 @@ from aiogram.enums import ParseMode
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -15,9 +16,11 @@ from core import (
 from keyboards import games_list_kb, reg_manage_kb, cancel_kb
 from models import Game, Registration
 from render import user_game_brief, render_teams_list, status_label
-from screens import show_user_home, show_admin_home, get_active_games_data
+from screens import (
+    show_user_home, show_admin_home, get_active_games_data,
+    render_admin_game_card)
 from states import RegisterFlow, EditNameFlow, EditPlayersFlow
-from utils import esc, fmt_dt
+from utils import esc, fmt_dt, safe_edit_text
 
 from constants import (
     TEAM_NAME_MIN, TEAM_NAME_MAX,
@@ -110,20 +113,47 @@ async def choose_game(cq: CallbackQuery, state: FSMContext):
 
 @user_r.callback_query(F.data == "cancel")
 async def cancel_any(cq: CallbackQuery, state: FSMContext):
+    current_state = await state.get_state()
     data = await state.get_data()
-    ui_msg_id = data.get("ui_msg_id")
-    
     await state.clear()
-    
-    if ui_msg_id:
-        try:
-            await cq.bot.delete_message(chat_id=cq.message.chat.id, message_id=ui_msg_id)
-        except Exception:
-            pass
-            
-    # Просто всплывающее уведомление, без нового сообщения в чате
-    await cq.answer("Действие отменено", show_alert=False)
 
+    if current_state and current_state.startswith("AddGameFlow"):
+        # Отменил создание игры — назад в админ-панель
+        await show_admin_home(cq.message, edit=True)
+
+    elif current_state and current_state.startswith("AdminAddTeamFlow"):
+        # Отменил добавление команды — назад в карточку игры
+        gid = data.get("game_id")
+        if gid:
+            await render_admin_game_card(cq.message, gid)
+        else:
+            await show_admin_home(cq.message, edit=True)
+
+    elif current_state and current_state.startswith("RegisterFlow"):
+        # Отменил регистрацию — назад к списку игр
+        await show_user_home(cq.message, cq.from_user.id, edit=True)
+
+    elif current_state and current_state.startswith(("EditNameFlow", "EditPlayersFlow")):
+        # Отменил редактирование команды — сообщение с кнопкой возврата к "Мои регистрации"
+        kb = InlineKeyboardBuilder()
+        kb.button(text="🗂 Мои регистрации", callback_data="my_regs")
+        if is_admin(cq.from_user.id):
+            kb.button(text="⚙️ В админку", callback_data="admin:back")
+        kb.adjust(1)
+        await safe_edit_text(
+            cq.message,
+            "Изменения отменены.",
+            reply_markup=kb.as_markup(),
+        )
+
+    else:
+        # Fallback: главное меню
+        if is_admin(cq.from_user.id):
+            await show_admin_home(cq.message, edit=True)
+        else:
+            await show_user_home(cq.message, cq.from_user.id, edit=True)
+
+    await cq.answer("Отменено")
 
 @user_r.message(RegisterFlow.entering_team_name)
 async def team_name_step(m: Message, state: FSMContext):
