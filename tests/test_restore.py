@@ -10,7 +10,6 @@ import models
 
 @pytest.mark.asyncio
 async def test_backup_restore_round_trip():
-    # Используем отдельный движок в памяти, чтобы не ломать основной conftest
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     
     async with engine.begin() as conn:

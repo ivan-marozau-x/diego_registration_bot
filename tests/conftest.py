@@ -1,6 +1,6 @@
 import os
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 
 # ВАЖНО: устанавливаем переменные ДО импорта db и config
 os.environ["BOT_TOKEN"] = "test_token"
@@ -17,3 +17,15 @@ async def setup_test_db():
     yield
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
+
+@pytest_asyncio.fixture
+async def db_session():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    Session = async_sessionmaker(engine, expire_on_commit=False)
+    async with Session() as session:
+        yield session
+
+    await engine.dispose()
