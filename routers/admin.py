@@ -3,6 +3,7 @@ from aiogram.enums import ParseMode
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import BufferedInputFile, CallbackQuery, FSInputFile, Message
+from aiogram_calendar import SimpleCalendar, SimpleCalendarCallback
 
 from datetime import datetime
 from typing import Optional
@@ -39,6 +40,7 @@ admin_r = Router()
 admin_r.message.filter(lambda m: m.from_user is not None and is_admin(m.from_user.id))
 admin_r.callback_query.filter(lambda cq: cq.from_user is not None and is_admin(cq.from_user.id))
 
+calendar = SimpleCalendar(locale="ru_RU")
 
 @admin_r.message(Command("admin"))
 async def admin_home(m: Message, state: FSMContext):
@@ -317,30 +319,33 @@ async def add_game_title(m: Message, state: FSMContext):
     await state.set_state(AddGameFlow.entering_when)
 
 
+    calendar_kb = await calendar.start_calendar()
     await m.bot.edit_message_text(
         chat_id=m.chat.id, message_id=ui_msg_id,
-        text="Когда? Введи дату/время (напр. 2025-10-01 19:00) или напиши «skip»:",
-        parse_mode=ParseMode.HTML, reply_markup=skip_kb()
+        text="Выбери дату игры:",
+        reply_markup=calendar_kb
     )
 
-@admin_r.message(AddGameFlow.entering_when)
-async def add_game_when(m: Message, state: FSMContext):
+@admin_r.callback_query(SimpleCalendarCallback.filter(), AddGameFlow.entering_when)
+async def process_simple_calendar(cq: CallbackQuery, callback_data: dict, state: FSMContext):
     data = await state.get_data()
     ui_msg_id = data.get("ui_msg_id")
-    dt = parse_datetime_maybe(m.text or "")
 
-    try: await m.delete()
-    except: pass
-
-    await state.update_data(when=dt.isoformat() if dt else None)
-    await state.set_state(AddGameFlow.entering_location)
-
-    await m.bot.edit_message_text(
-        chat_id=m.chat.id, message_id=ui_msg_id,
-        text="Где проходит игра? (или «skip»)",
-        parse_mode=ParseMode.HTML, reply_markup=skip_kb()
-    )
-
+    # process_selection возвращает selected (bool) и date (datetime)
+    selected, date = await calendar.process_selection(cq, callback_data)
+    
+    if selected:
+        # Сохраняем выбранную дату (пока без времени)
+        await state.update_data(when=date.isoformat())
+        await state.set_state(AddGameFlow.entering_location)
+        
+        # Переходим к следующему шагу (локация)
+        await safe_edit_text(
+            cq.message,
+            "Где проходит игра? (или нажми «Пропустить»):",
+            reply_markup=skip_kb()
+        )
+        await cq.answer(f"Дата выбрана: {date.strftime('%d.%m.%Y')}")
 
 @admin_r.message(AddGameFlow.entering_location)
 async def add_game_location(m: Message, state: FSMContext):
@@ -466,7 +471,7 @@ async def wizard_skip(cq: CallbackQuery, state: FSMContext):
     if current_state == AddGameFlow.entering_when.state:
         await state.update_data(when=None)
         await state.set_state(AddGameFlow.entering_location)
-        text = "Где проходит игра? (или нажми «Пропустить»)"
+        text = "Где проходит игра? (или нажми «Пропустить»):"
         kb = skip_kb()
         
     elif current_state == AddGameFlow.entering_location.state:
