@@ -2,8 +2,20 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from config import settings
 from constants import SKIP_WORDS
+from aiogram.exceptions import TelegramBadRequest
 
 import html
+
+async def safe_edit_text(message, text: str, reply_markup=None, parse_mode="HTML"):
+    """Безопасно редактирует сообщение, игнорируя ошибку 'message is not modified'."""
+    try:
+        await message.edit_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+    except TelegramBadRequest as e:
+        if "message is not modified" in str(e):
+            pass
+        else:
+            raise
+
 
 def esc(text: str | None) -> str:
     """Экранирует HTML-теги для безопасного вывода в Telegram."""

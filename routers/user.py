@@ -110,9 +110,19 @@ async def choose_game(cq: CallbackQuery, state: FSMContext):
 
 @user_r.callback_query(F.data == "cancel")
 async def cancel_any(cq: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    ui_msg_id = data.get("ui_msg_id")
+    
     await state.clear()
-    await cq.message.answer("Действие отменено.")
-    await cq.answer()
+    
+    if ui_msg_id:
+        try:
+            await cq.bot.delete_message(chat_id=cq.message.chat.id, message_id=ui_msg_id)
+        except Exception:
+            pass
+            
+    # Просто всплывающее уведомление, без нового сообщения в чате
+    await cq.answer("Действие отменено", show_alert=False)
 
 
 @user_r.message(RegisterFlow.entering_team_name)

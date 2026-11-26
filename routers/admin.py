@@ -26,7 +26,7 @@ from models import Game, Registration
 from render import admin_game_brief, build_teams_view
 from screens import show_admin_home, show_user_home
 from states import AddGameFlow, AdminAddTeamFlow
-from utils import esc, fmt_dt, parse_datetime_maybe, to_utc
+from utils import safe_edit_text, esc, fmt_dt, parse_datetime_maybe, to_utc
 
 from constants import (
     TEAM_NAME_MIN, TEAM_NAME_MAX,
@@ -277,8 +277,10 @@ async def admin_delete_game(cq: CallbackQuery):
         g = await s.get(Game, gid)
         if not g:
             await cq.answer("Не найдено", show_alert=True); return
-        await s.delete(g)  # ondelete=CASCADE + PRAGMA foreign_keys=ON
-    await cq.message.answer("Игра и все её регистрации удалены.")
+        await s.delete(g)
+    
+    # Редактируем текущее сообщение, убирая кнопки
+    await cq.message.edit_text("🗑 Игра и все её регистрации удалены.", reply_markup=None)
     await cq.answer("Готово")
 
 
@@ -287,99 +289,181 @@ async def admin_delete_game(cq: CallbackQuery):
 @admin_r.callback_query(F.data == "admin:add_game")
 async def add_game_start(cq: CallbackQuery, state: FSMContext):
     await state.set_state(AddGameFlow.entering_title)
-    await cq.message.answer("Введи <b>название</b> игры:", parse_mode=ParseMode.HTML, reply_markup=cancel_kb())
+
+    msg = await cq.message.answer(
+        "Введи <b>название</b> игры (или нажми /cancel):",
+        parse_mode=ParseMode.HTML,
+        reply_markup=cancel_kb()
+        )
+    await state.update_data(ui_msg_id=msg.message_id)
     await cq.answer()
 
 
 @admin_r.message(AddGameFlow.entering_title)
 async def add_game_title(m: Message, state: FSMContext):
+    data = await state.get_data()
+    ui_msg_id = data.get("ui_msg_id")
     title = (m.text or "").strip()
+
+    try: await m.delete()
+    except: pass
+
     if not (GAME_TITLE_MIN <= len(title) <= GAME_TITLE_MAX):
-        await m.answer("Название 2–200 символов. Попробуй ещё раз:")
+        await m.bot.edit_message_text(
+            chat_id=m.chat.id, message_id=ui_msg_id,
+            text=f"Название {GAME_TITLE_MIN}–{GAME_TITLE_MAX} символов. Попробуй ещё раз:",
+            parse_mode=ParseMode.HTML, reply_markup=cancel_kb()
+        )
         return
+    
     await state.update_data(title=title)
     await state.set_state(AddGameFlow.entering_when)
-    await m.answer("Когда? Введи дату/время (напр. 2025-10-01 19:00) или напиши «skip»:")
 
+
+    await m.bot.edit_message_text(
+        chat_id=m.chat.id, message_id=ui_msg_id,
+        text="Когда? Введи дату/время (напр. 2025-10-01 19:00) или напиши «skip»:",
+        parse_mode=ParseMode.HTML, reply_markup=cancel_kb()
+    )
 
 @admin_r.message(AddGameFlow.entering_when)
 async def add_game_when(m: Message, state: FSMContext):
+    data = await state.get_data()
+    ui_msg_id = data.get("ui_msg_id")
     dt = parse_datetime_maybe(m.text or "")
+
+    try: await m.delete()
+    except: pass
+
     await state.update_data(when=dt.isoformat() if dt else None)
     await state.set_state(AddGameFlow.entering_location)
-    await m.answer("Где проходит игра? (или «skip»)")
+
+    await m.bot.edit_message_text(
+        chat_id=m.chat.id, message_id=ui_msg_id,
+        text="Где проходит игра? (или «skip»)",
+        parse_mode=ParseMode.HTML, reply_markup=cancel_kb()
+    )
 
 
 @admin_r.message(AddGameFlow.entering_location)
 async def add_game_location(m: Message, state: FSMContext):
+    data = await state.get_data()
+    ui_msg_id = data.get("ui_msg_id")
     loc = (m.text or "").strip()
-    if loc.lower() in SKIP_WORDS:
-        loc = None
+    if loc.lower() in SKIP_WORDS: loc = None
+
+    try: await m.delete()
+    except: pass
+
     await state.update_data(location=loc)
     await state.set_state(AddGameFlow.entering_teams_capacity)
-    await m.answer("Лимит по <b>числу команд</b>? Введи число или «skip»:", parse_mode=ParseMode.HTML)
+
+    await m.bot.edit_message_text(
+        chat_id=m.chat.id, message_id=ui_msg_id,
+        text="Лимит по <b>числу команд</b>? Введи число или «skip»:",
+        parse_mode=ParseMode.HTML, reply_markup=cancel_kb()
+    )
 
 
 @admin_r.message(AddGameFlow.entering_teams_capacity)
 async def add_game_teams_capacity(m: Message, state: FSMContext):
+    data = await state.get_data()
+    ui_msg_id = data.get("ui_msg_id")
     raw = (m.text or "").strip().lower()
     teams_cap: Optional[int] = None
+
+    try: await m.delete()
+    except: pass
+
     if raw not in SKIP_WORDS:
         try:
             teams_cap = int(raw)
             if teams_cap <= 0:
-                await m.answer("Должно быть положительное число или «skip». Попробуй снова:")
+                await m.bot.edit_message_text(chat_id=m.chat.id, message_id=ui_msg_id, text="Должно быть положительное число или «skip». Попробуй снова:", reply_markup=cancel_kb())
                 return
         except ValueError:
-            await m.answer("Нужно число или «skip». Попробуй снова:")
+            await m.bot.edit_message_text(chat_id=m.chat.id, message_id=ui_msg_id, text="Нужно число или «skip». Попробуй снова:", reply_markup=cancel_kb())
             return
+        
     await state.update_data(teams_capacity=teams_cap)
     await state.set_state(AddGameFlow.entering_people_capacity)
-    await m.answer("Лимит по <b>общему числу людей</b>? Введи число или «skip»:", parse_mode=ParseMode.HTML)
+
+    await m.bot.edit_message_text(
+        chat_id=m.chat.id, message_id=ui_msg_id,
+        text="Лимит по <b>общему числу людей</b>? Введи число или «skip»:",
+        parse_mode=ParseMode.HTML, reply_markup=cancel_kb()
+    )
 
 
 @admin_r.message(AddGameFlow.entering_people_capacity)
 async def add_game_people_capacity(m: Message, state: FSMContext):
+    data = await state.get_data()
+    ui_msg_id = data.get("ui_msg_id")
     raw = (m.text or "").strip().lower()
     people_cap: Optional[int] = None
+
+    try: await m.delete()
+    except: pass
+
     if raw not in SKIP_WORDS:
         try:
             people_cap = int(raw)
             if people_cap <= 0:
-                await m.answer("Должно быть положительное число или «skip». Попробуй снова:")
+                await m.bot.edit_message_text(chat_id=m.chat.id, message_id=ui_msg_id, text="Должно быть положительное число или «skip». Попробуй снова:", reply_markup=cancel_kb())
                 return
         except ValueError:
-            await m.answer("Нужно число или «skip». Попробуй снова:")
+            await m.bot.edit_message_text(chat_id=m.chat.id, message_id=ui_msg_id, text="Нужно число или «skip». Попробуй снова:", reply_markup=cancel_kb())
             return
+        
     await state.update_data(people_capacity=people_cap)
     await state.set_state(AddGameFlow.entering_max_per_team)
-    await m.answer("Макс. людей <b>в одной команде</b>? Введи число или «skip»:", parse_mode=ParseMode.HTML)
 
+    await m.bot.edit_message_text(
+        chat_id=m.chat.id, message_id=ui_msg_id,
+        text="Макс. людей <b>в одной команде</b>? Введи число или «skip»:",
+        parse_mode=ParseMode.HTML, reply_markup=cancel_kb()
+    )
 
 @admin_r.message(AddGameFlow.entering_max_per_team)
 async def add_game_max_per_team(m: Message, state: FSMContext):
+    data = await state.get_data()
+    ui_msg_id = data.get("ui_msg_id")
     raw = (m.text or "").strip().lower()
     maxpt: Optional[int] = None
+
+    try: await m.delete()
+    except: pass
+
     if raw not in SKIP_WORDS:
         try:
             maxpt = int(raw)
             if maxpt <= 0:
-                await m.answer("Должно быть положительное число или «skip». Попробуй снова:")
+                await m.bot.edit_message_text(chat_id=m.chat.id, message_id=ui_msg_id, text="Должно быть положительное число или «skip». Попробуй снова:", reply_markup=cancel_kb())
                 return
         except ValueError:
-            await m.answer("Нужно число или «skip». Попробуй снова:")
+            await m.bot.edit_message_text(chat_id=m.chat.id, message_id=ui_msg_id, text="Нужно число или «skip». Попробуй снова:", reply_markup=cancel_kb())
             return
+        
     await state.update_data(max_players_per_team=maxpt)
     await state.set_state(AddGameFlow.confirming_active)
-    await m.answer("Активировать приём регистраций сейчас? (да/нет)")
+
+    await m.bot.edit_message_text(
+        chat_id=m.chat.id, message_id=ui_msg_id,
+        text="Активировать приём регистраций сейчас? (да/нет)",
+        reply_markup=cancel_kb()
+    )
 
 
 @admin_r.message(AddGameFlow.confirming_active)
 async def add_game_confirm(m: Message, state: FSMContext):
-    from datetime import datetime
+    data = await state.get_data()
+    ui_msg_id = data.get("ui_msg_id")
     ans = (m.text or "").strip().lower()
     active = ans in {"да", "yes", "y", "д", "ага", "включить"}
-    data = await state.get_data()
+    
+    try: await m.delete()
+    except: pass
+    
     when_iso = data.get("when")
     dt = to_utc(datetime.fromisoformat(when_iso)) if when_iso else None
 
@@ -395,9 +479,13 @@ async def add_game_confirm(m: Message, state: FSMContext):
         )
         s.add(g)
         await s.flush()
-
         stats = await get_game_stats(s, g.id)
-
-        await m.answer("Игра добавлена:\n" + admin_game_brief(g, stats), parse_mode=ParseMode.HTML)
+        
+        # Вместо отправки нового сообщения, редактируем текущее
+        text = "✅ Игра добавлена:\n" + admin_game_brief(g, stats)
+        await m.bot.edit_message_text(
+            chat_id=m.chat.id, message_id=ui_msg_id,
+            text=text, parse_mode=ParseMode.HTML,
+            reply_markup=admin_game_actions_kb(g.id, g.is_active)
+        )
     await state.clear()
-
