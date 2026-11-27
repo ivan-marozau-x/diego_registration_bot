@@ -9,14 +9,11 @@ from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
-
 
 from backup_db import generate_backup
 from core import (
     is_admin, session_scope, get_game_stats,
-    load_teams_for_admin, count_confirmed_teams,
-    sum_confirmed_people, next_admin_user_id
+    load_teams_for_admin,
     )
 from db import engine
 from keyboards import (
@@ -25,14 +22,17 @@ from keyboards import (
     skip_kb, yes_no_kb, admin_back_kb
     )
 from models import Game, Registration
-from render import admin_game_brief, build_teams_view
+from render import admin_game_brief, build_teams_view, status_label
 from screens import show_admin_home, show_user_home, render_admin_game_card
+from services.registration_service import (
+    create_registration, RegistrationError,
+    TeamNameTakenError, PlayersLimitError
+    )
 from states import AddGameFlow, AdminAddTeamFlow
-from utils import safe_edit_text, esc, fmt_dt, parse_datetime_maybe, to_utc
+from utils import safe_edit_text, esc, fmt_dt, to_utc
 
 from constants import (
     TEAM_NAME_MIN, TEAM_NAME_MAX,
-    STATUS_CONFIRMED, STATUS_WAITLIST,
     GAME_TITLE_MIN, GAME_TITLE_MAX, SKIP_WORDS
 )
 
@@ -132,7 +132,7 @@ async def admin_add_team_start(cq: CallbackQuery, state: FSMContext):
     gid = int(cq.data.split(":")[2])
     await state.set_state(AdminAddTeamFlow.entering_team_name)
     await state.update_data(game_id=gid)
-    await cq.message.answer("Введите имя новой команды:", reply_markup=skip_kb())
+    await cq.message.answer("Введите название новой команды:", reply_markup=cancel_kb())
     await cq.answer()
 
 
@@ -140,76 +140,62 @@ async def admin_add_team_start(cq: CallbackQuery, state: FSMContext):
 async def admin_add_team_name(m: Message, state: FSMContext):
     name = (m.text or "").strip()
     if not (TEAM_NAME_MIN <= len(name) <= TEAM_NAME_MAX):
-        await m.answer(f"Имя {TEAM_NAME_MIN}–{TEAM_NAME_MAX}  символов. Попробуйте снова:")
+        await m.answer(f"Название команды должно быть от {TEAM_NAME_MIN} до {TEAM_NAME_MAX} символов. Попробуйте снова:")
         return
     await state.update_data(team_name=name)
     await state.set_state(AdminAddTeamFlow.entering_players)
-    await m.answer("Сколько игроков в команде? (положительное число):")
+    await m.answer("Сколько игроков в команде?:")
 
 
 @admin_r.message(AdminAddTeamFlow.entering_players)
 async def admin_add_team_players(m: Message, state: FSMContext):
     try:
         players = int((m.text or "").strip())
+        if players <= 0:
+            raise ValueError
     except ValueError:
         await m.answer("Нужно положительное число. Попробуйте снова:")
         return
-    if players <= 0:
-        await m.answer("Число должно быть положительным. Попробуйте снова:")
-        return
-
+    
     data = await state.get_data()
     gid = data["game_id"]
     name = data["team_name"]
 
     async with session_scope() as s:
-        g = await s.get(Game, gid)
-        if not g:
-            await m.answer("Игра не найдена."); await state.clear(); return
+        try:
+            reg = await create_registration(
+                s,
+                user_id=None,
+                chat_id=0,
+                game_id=gid,
+                team_name=name,
+                players=players,
+                source="admin",
+            )
+            # Сохраняем нужные поля до закрытия сессии и коммита
+            final_name = reg.team_name
+            final_status = reg.status
 
-        # Проверка уникальности имени в рамках игры
-        exists = await s.execute(select(Registration).where(Registration.game_id == gid, Registration.team_name == name))
-        if exists.scalar_one_or_none():
-            await m.answer("Имя уже занято. Введите другое:")
+        except TeamNameTakenError as e:
+            await m.answer(f"{esc(e.message)} Введите другое название:")
             await state.set_state(AdminAddTeamFlow.entering_team_name)
             return
 
-        # Лимит на людей в одной команде
-        if g.max_players_per_team is not None and players > g.max_players_per_team:
-            await m.answer("Число превышает допустимый предел для одной команды. Введите меньшее число:")
+        except PlayersLimitError as e:
+            # Не сбрасываем state, просим ввести число заново
+            await m.answer(f"{esc(e.message)} Введите другое количество игроков:")
             return
 
-        # Решение о статусе (как для обычной регистрации)
-        status = STATUS_CONFIRMED
-        confirmed_teams = await count_confirmed_teams(s, gid)
-        confirmed_people = await sum_confirmed_people(s, gid)
-
-        teams_over = (g.teams_capacity is not None) and (confirmed_teams >= g.teams_capacity)
-        people_over = (g.people_capacity is not None) and ((confirmed_people + players) > g.people_capacity)
-
-        if teams_over or people_over:
-            status = STATUS_WAITLIST
-
-        # 🔧 КЛЮЧЕВАЯ ПРАВКА: уникальный отрицательный user_id для админских команд
-        admin_uid = await next_admin_user_id(s)
-
-        reg = Registration(
-            user_id=admin_uid,
-            chat_id=0,
-            game_id=gid,
-            team_name=name,
-            players=players,
-            status=status
-        )
-        s.add(reg)
-        try:
-            await s.flush()
-        except IntegrityError:
-            await m.answer("Не удалось сохранить. Попробуйте ещё раз.")
+        except RegistrationError as e:
+            await m.answer(esc(e.message))
+            await state.clear()
             return
 
-        await m.answer(f"Команда «{esc(name)}» добавлена ({players} чел., статус: {status}).")
     await state.clear()
+    await m.answer(
+        f"✅ Команда «{esc(final_name)}» добавлена ({players} чел., "
+        f"статус: {status_label(final_status)})."
+    )
 
 
 @admin_r.callback_query(F.data.startswith("admin:delteam:"))
