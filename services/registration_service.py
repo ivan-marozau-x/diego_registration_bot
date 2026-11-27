@@ -9,6 +9,7 @@ from constants import (
     STATUS_CONFIRMED,
     STATUS_WAITLIST,
     )
+from core import count_confirmed_teams, sum_confirmed_people, next_admin_user_id
 
 # Exceptions
 
@@ -20,6 +21,9 @@ class RegistrationError(Exception):
 class TeamNameTakenError(RegistrationError):
     pass
 
+class InvalidTeamNameError(RegistrationError):
+    pass
+
 class PlayersLimitError(RegistrationError):
     pass
 
@@ -29,12 +33,12 @@ def normalize_team_name(name: str) -> str:
     name = name.strip()
 
     if not name:
-        raise RegistrationError(
+        raise InvalidTeamNameError(
             "Название команды не может быть пустым."
         )
 
     if not (TEAM_NAME_MIN <= len(name) <= TEAM_NAME_MAX):
-        raise RegistrationError(
+        raise InvalidTeamNameError(
             f"Название команды должно быть от {TEAM_NAME_MIN} до {TEAM_NAME_MAX} символов."
         )
 
@@ -59,7 +63,7 @@ def map_registration_integrity_error(
 
     if constraint == "uix_reg_game_team":
         return TeamNameTakenError(
-            "Название команды уже занято. Попробуйте другое."
+            "Название команды уже занято."
         )
 
     if constraint == "uix_reg_game_user":
@@ -144,7 +148,6 @@ async def create_registration(
             f"Максимум – {game.max_players_per_team} игроков в команде."
         )
 
-    from core import count_confirmed_teams, sum_confirmed_people, next_admin_user_id
     confirmed_teams = await count_confirmed_teams(session, game_id)
     confirmed_people = await sum_confirmed_people(session, game_id)
 
@@ -212,5 +215,59 @@ async def rename_team(
             raise mapped_error from exc
 
         raise
+
+    return reg
+
+async def update_players(
+    session: AsyncSession,
+    *,
+    reg_id: int,
+    user_id: int,
+    players: int,
+) -> Registration:
+    if not isinstance(players, int) or isinstance(players, bool) or players <= 0:
+        raise RegistrationError("Количество игроков должно быть положительным целым числом.")
+
+    reg = await session.get(Registration, reg_id)
+    if not reg or reg.user_id != user_id:
+        raise RegistrationError("Регистрация не найдена.")
+
+    stmt = select(Game).where(Game.id == reg.game_id).with_for_update()
+    game = (await session.execute(stmt)).scalar_one_or_none()
+    if not game or not game.is_active:
+        raise RegistrationError("Игра недоступна.")
+
+    if game.max_players_per_team is not None and players > game.max_players_per_team:
+        raise PlayersLimitError(
+            f"Максимум — {game.max_players_per_team} игроков в команде."
+        )
+
+    reg.players = players
+
+    confirmed_teams = await count_confirmed_teams(session, reg.game_id)
+    confirmed_people_excl = await sum_confirmed_people(
+        session, reg.game_id, exclude_reg_id=reg.id
+    )
+
+    # Если команда уже была подтверждена, она входит в confirmed_teams,
+    # поэтому проверяем строгое превышение (>), иначе (>=)
+    if reg.status == STATUS_CONFIRMED:
+        teams_over = (
+            game.teams_capacity is not None
+            and confirmed_teams > game.teams_capacity
+        )
+    else:
+        teams_over = (
+            game.teams_capacity is not None
+            and confirmed_teams >= game.teams_capacity
+        )
+
+    people_over = (
+        game.people_capacity is not None
+        and (confirmed_people_excl + players) > game.people_capacity
+    )
+
+    reg.status = STATUS_WAITLIST if (teams_over or people_over) else STATUS_CONFIRMED
+    await session.flush()
 
     return reg

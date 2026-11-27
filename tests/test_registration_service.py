@@ -7,6 +7,8 @@ from services.registration_service import (
     create_registration,
     validate_team_name,
     rename_team,
+    update_players,
+    PlayersLimitError,
     RegistrationError
 )
 from constants import STATUS_CONFIRMED, STATUS_WAITLIST
@@ -158,3 +160,95 @@ async def test_rename_to_taken_name(db_session):
     )
     await db_session.refresh(reg)
     assert reg.team_name == "Team X"
+
+# --------------- update_players ---------------
+
+@pytest.mark.asyncio
+async def test_update_players_happy(db_session):
+    game = await _make_game(db_session)
+    reg = await create_registration(
+        db_session, user_id=5, chat_id=5,
+        game_id=game.id, team_name="Update Me", players=2,
+    )
+    updated = await update_players(
+        db_session, reg_id=reg.id, user_id=5, players=5,
+    )
+    assert updated.players == 5
+    assert updated.status == STATUS_CONFIRMED
+
+
+@pytest.mark.asyncio
+async def test_update_players_exceeds_limit(db_session):
+    game = await _make_game(db_session, max_per_team=4)
+    reg = await create_registration(
+        db_session, user_id=5, chat_id=5,
+        game_id=game.id, team_name="Limit Test", players=2,
+    )
+    with pytest.raises(PlayersLimitError, match="Максимум"):
+        await update_players(
+            db_session, reg_id=reg.id, user_id=5, players=6,
+        )
+    await db_session.refresh(reg)
+    assert reg.players == 2  # не изменилось
+
+
+@pytest.mark.asyncio
+async def test_update_players_waitlist_to_confirmed(db_session):
+    """Регрессия на баг >= vs >: команда в waitlist может стать confirmed,
+    если место освободилось (capacity=1, waitlist-команда меняет состав)."""
+    game = await _make_game(db_session, capacity_teams=1)
+    # Занимаем единственное место
+    await create_registration(
+        db_session, user_id=1, chat_id=1,
+        game_id=game.id, team_name="First", players=3,
+    )
+    # Вторая уходит в waitlist
+    reg2 = await create_registration(
+        db_session, user_id=2, chat_id=2,
+        game_id=game.id, team_name="Second", players=3,
+    )
+    assert reg2.status == STATUS_WAITLIST
+    
+    # Первая команда меняет состав — мест всё равно 1 занято, вторая
+    # должна остаться в waitlist (это тест на отсутствие ложного promoted)
+    updated = await update_players(
+        db_session, reg_id=reg2.id, user_id=2, players=2,
+    )
+    assert updated.status == STATUS_WAITLIST  # мест нет — не прыгаем в confirmed
+
+
+@pytest.mark.asyncio
+async def test_update_players_already_confirmed_stays(db_session):
+    """Ключевой тест на баг > vs >=:
+    команда в confirmed НЕ должна выпасть в waitlist, если capacity == confirmed_teams.
+    (это тот самый случай, когда наивный код с >= уронил бы её в waitlist)"""
+    game = await _make_game(db_session, capacity_teams=2)
+    reg_a = await create_registration(
+        db_session, user_id=1, chat_id=1,
+        game_id=game.id, team_name="AA", players=2,
+    )
+    await create_registration(
+        db_session, user_id=2, chat_id=2,
+        game_id=game.id, team_name="BB", players=2,
+    )
+    assert reg_a.status == STATUS_CONFIRMED
+    
+    # Меняем состав A — capacity=2, confirmed=2, места не появилось,
+    # но A была confirmed и должна остаться
+    updated = await update_players(
+        db_session, reg_id=reg_a.id, user_id=1, players=3,
+    )
+    assert updated.status == STATUS_CONFIRMED  # НЕ waitlist
+
+
+@pytest.mark.asyncio
+async def test_update_players_not_owner(db_session):
+    game = await _make_game(db_session)
+    reg = await create_registration(
+        db_session, user_id=1, chat_id=1,
+        game_id=game.id, team_name="Mine", players=2,
+    )
+    with pytest.raises(RegistrationError, match="не найдена"):
+        await update_players(
+            db_session, reg_id=reg.id, user_id=999, players=3,
+        )

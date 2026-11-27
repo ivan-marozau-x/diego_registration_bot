@@ -25,14 +25,17 @@ from models import Game, Registration
 from render import admin_game_brief, build_teams_view, status_label
 from screens import show_admin_home, show_user_home, render_admin_game_card
 from services.registration_service import (
-    create_registration, RegistrationError,
-    TeamNameTakenError, PlayersLimitError
+    validate_team_name,
+    create_registration, 
+    RegistrationError,
+    TeamNameTakenError,
+    InvalidTeamNameError, 
+    PlayersLimitError
     )
 from states import AddGameFlow, AdminAddTeamFlow
 from utils import safe_edit_text, esc, fmt_dt, to_utc
 
 from constants import (
-    TEAM_NAME_MIN, TEAM_NAME_MAX,
     GAME_TITLE_MIN, GAME_TITLE_MAX, SKIP_WORDS
 )
 
@@ -138,13 +141,29 @@ async def admin_add_team_start(cq: CallbackQuery, state: FSMContext):
 
 @admin_r.message(AdminAddTeamFlow.entering_team_name)
 async def admin_add_team_name(m: Message, state: FSMContext):
-    name = (m.text or "").strip()
-    if not (TEAM_NAME_MIN <= len(name) <= TEAM_NAME_MAX):
-        await m.answer(f"Название команды должно быть от {TEAM_NAME_MIN} до {TEAM_NAME_MAX} символов. Попробуйте снова:")
-        return
-    await state.update_data(team_name=name)
+    data = await state.get_data()
+    gid = data["game_id"]
+
+    async with session_scope() as s:
+        game = await s.get(Game, gid)
+        if not game:
+            await m.answer("Игра не найдена.")
+            await state.clear()
+            return
+
+        try:
+            clean_name = await validate_team_name(s, gid, m.text or "")
+        except (TeamNameTakenError, InvalidTeamNameError) as e:
+            await m.answer(f"{esc(e.message)} Введите другое название:")
+            return
+
+        max_players = game.max_players_per_team
+
+    await state.update_data(team_name=clean_name)
     await state.set_state(AdminAddTeamFlow.entering_players)
-    await m.answer("Сколько игроков в команде?:")
+
+    limit_hint = f" (максимум {max_players})" if max_players is not None else ""
+    await m.answer(f"Сколько игроков в команде{limit_hint}?:")
 
 
 @admin_r.message(AdminAddTeamFlow.entering_players)
