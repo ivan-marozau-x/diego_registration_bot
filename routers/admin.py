@@ -1,11 +1,18 @@
+from datetime import datetime, date, time, timedelta, timezone
+from zoneinfo import ZoneInfo
+from aiogram.types import (
+    BufferedInputFile, CallbackQuery, FSInputFile, Message, 
+    InlineKeyboardButton, InlineKeyboardMarkup
+)
+from aiogram_calendar import SimpleCalendar, SimpleCalendarCallback
+from aiogram_calendar.schemas import SimpleCalAct
+from config import settings
+
 from aiogram import F, Router
 from aiogram.enums import ParseMode
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import BufferedInputFile, CallbackQuery, FSInputFile, Message
-from aiogram_calendar import SimpleCalendar, SimpleCalendarCallback
 
-from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import select
@@ -18,7 +25,7 @@ from core import (
 from db import engine
 from keyboards import (
     admin_games_kb, admin_game_actions_kb,
-    admin_teams_list_kb, cancel_kb,
+    admin_teams_list_kb, cancel_kb, time_kb,
     skip_kb, yes_no_kb, admin_back_kb
     )
 from models import Game, Registration
@@ -43,7 +50,43 @@ admin_r = Router()
 admin_r.message.filter(lambda m: m.from_user is not None and is_admin(m.from_user.id))
 admin_r.callback_query.filter(lambda cq: cq.from_user is not None and is_admin(cq.from_user.id))
 
-calendar = SimpleCalendar(locale="ru_RU")
+
+class CustomCalendar(SimpleCalendar):
+    async def start_calendar(
+        self,
+        year: int | None = None,
+        month: int | None = None,
+    ) -> InlineKeyboardMarkup:
+        now = datetime.now(ZoneInfo(settings.tz))
+        kb = await super().start_calendar(
+            year=now.year if year is None else year,
+            month=now.month if month is None else month,
+            )
+        
+        for row in kb.inline_keyboard:
+            for index, button in enumerate(row):
+                if not button.callback_data:
+                    continue
+                try:
+                    calendar_action = SimpleCalendarCallback.unpack(button.callback_data).act
+                    if calendar_action == SimpleCalAct.cancel:
+                        row[index] = InlineKeyboardButton(
+                            text="⏭ Пропустить",
+                            callback_data="wiz:skip"
+                        )
+                except Exception:
+                    pass
+        
+        return kb
+
+def build_game_calendar() -> CustomCalendar:
+    today = datetime.now(ZoneInfo(settings.tz)).date()
+    calendar = CustomCalendar(locale="ru_RU")
+    calendar.set_dates_range(
+        min_date=datetime.combine(today, time.min),
+        max_date=datetime.combine(today + timedelta(days=365), time.max)
+        )
+    return calendar
 
 @admin_r.message(Command("admin"))
 async def admin_home(m: Message, state: FSMContext):
@@ -291,11 +334,12 @@ async def admin_delete_game(cq: CallbackQuery):
 
 @admin_r.callback_query(F.data == "admin:add_game")
 async def add_game_start(cq: CallbackQuery, state: FSMContext):
+    await state.clear()
     await state.set_state(AddGameFlow.entering_title)
 
     await safe_edit_text(
         cq.message,
-        "Введи <b>название</b> игры (или нажми /cancel):",
+        "Введи <b>название</b> игры (или нажми ❌ Отмена):",
         parse_mode=ParseMode.HTML,
         reply_markup=cancel_kb()
         )
@@ -323,34 +367,147 @@ async def add_game_title(m: Message, state: FSMContext):
     await state.update_data(title=title)
     await state.set_state(AddGameFlow.entering_when)
 
-
+    calendar = build_game_calendar()
     calendar_kb = await calendar.start_calendar()
+    
     await m.bot.edit_message_text(
         chat_id=m.chat.id, message_id=ui_msg_id,
         text="Выбери дату игры:",
         reply_markup=calendar_kb
     )
 
-@admin_r.callback_query(SimpleCalendarCallback.filter(), AddGameFlow.entering_when)
-async def process_simple_calendar(cq: CallbackQuery, callback_data: dict, state: FSMContext):
+
+@admin_r.callback_query(
+    SimpleCalendarCallback.filter(),
+    AddGameFlow.entering_when
+)
+async def process_simple_calendar(
+    cq: CallbackQuery,
+    callback_data: SimpleCalendarCallback,
+    state: FSMContext
+):
+    calendar = build_game_calendar()
+    selected, selected_date = await calendar.process_selection(
+        cq,
+        callback_data
+    )
+
+    if not selected:
+        if callback_data.act not in {SimpleCalAct.ignore, SimpleCalAct.day}:
+            await cq.answer()
+        return
+
+    selected_day = (
+        selected_date.date()
+        if isinstance(selected_date, datetime)
+        else selected_date
+    )
+    today = datetime.now(ZoneInfo(settings.tz)).date()
+
+    if selected_day < today:
+        await cq.answer(
+            "Нельзя выбрать прошедшую дату.",
+            show_alert=True
+        )
+        return
+
+    await state.update_data(when_date=selected_day.isoformat())
+    await state.set_state(AddGameFlow.entering_when_time)
+
+    await safe_edit_text(
+        cq.message,
+        f"Дата: {selected_day.strftime('%d.%m.%Y')}.\n"
+        "Выбери время игры:",
+        reply_markup=time_kb()
+    )
+
+    await cq.answer()
+        
+@admin_r.callback_query(F.data.startswith("time:"), AddGameFlow.entering_when_time)
+async def process_time_choice(cq: CallbackQuery, state: FSMContext):
+    time_val = cq.data.split(":", maxsplit=1)[1]
+    
+    if time_val == "manual":
+        await cq.message.edit_text(
+            "Введи время в формате ЧЧ:ММ (например, 19:15):",
+            reply_markup=cancel_kb()
+        )
+        await cq.answer()
+        return
+    
+    await save_time_and_next(cq.message, state, time_val)
+    await cq.answer()
+
+@admin_r.message(AddGameFlow.entering_when_time)
+async def add_game_manual_time(m: Message, state: FSMContext):
+    time_val = (m.text or "").strip()
+    
+    try:
+        parsed_time = datetime.strptime(time_val, "%H:%M")
+        time_val = parsed_time.strftime("%H:%M")
+    except ValueError:
+        await m.answer(
+            "Некорректное время. Введи время в формате ЧЧ:ММ "
+            "(например, 19:15)."
+        )
+        return
+    
+    try:
+        await m.delete()
+    except Exception:
+        pass
+
+    await save_time_and_next(m, state, time_val)
+    
+
+async def save_time_and_next(msg_obj: Message, state: FSMContext, time_val: str):
     data = await state.get_data()
+    date_str = data.get("when_date")
     ui_msg_id = data.get("ui_msg_id")
 
-    # process_selection возвращает selected (bool) и date (datetime)
-    selected, date = await calendar.process_selection(cq, callback_data)
-    
-    if selected:
-        # Сохраняем выбранную дату (пока без времени)
-        await state.update_data(when=date.isoformat())
-        await state.set_state(AddGameFlow.entering_location)
-        
-        # Переходим к следующему шагу (локация)
-        await safe_edit_text(
-            cq.message,
-            "Где проходит игра? (или нажми «Пропустить»):",
-            reply_markup=skip_kb()
+    if not date_str or not ui_msg_id:
+        await state.clear()
+        await msg_obj.answer(
+            "Сессия создания игры устарела. "
+            "Начни создание заново через /admin."
         )
-        await cq.answer(f"Дата выбрана: {date.strftime('%d.%m.%Y')}")
+        return
+
+    try:
+        game_datetime = datetime.strptime(
+            f"{date_str} {time_val}",
+            "%Y-%m-%d %H:%M"
+        )
+    except ValueError:
+        await state.clear()
+        await msg_obj.answer(
+            "Не удалось определить дату или время. "
+            "Начни создание игры заново через /admin."
+        )
+        return
+    
+    game_datetime_utc = to_utc(game_datetime)
+    if game_datetime_utc <= datetime.now(timezone.utc):
+        await msg_obj.bot.edit_message_text(
+            chat_id=msg_obj.chat.id,
+            message_id=ui_msg_id,
+            text="Это время уже прошло. Выбери другое время игры:",
+            reply_markup=time_kb()
+        )
+        return
+
+    dt_str = game_datetime.isoformat(timespec="seconds")
+
+    await state.update_data(when=dt_str)
+    await state.set_state(AddGameFlow.entering_location)
+
+    await msg_obj.bot.edit_message_text(
+        chat_id=msg_obj.chat.id,
+        message_id=ui_msg_id,
+        text="Где проходит игра? (или нажми «Пропустить»):",
+        reply_markup=skip_kb()
+    )
+
 
 @admin_r.message(AddGameFlow.entering_location)
 async def add_game_location(m: Message, state: FSMContext):
@@ -473,8 +630,14 @@ async def wizard_skip(cq: CallbackQuery, state: FSMContext):
         return
 
     # В зависимости от того, где мы находимся, пропускаем шаг и идем дальше
-    if current_state == AddGameFlow.entering_when.state:
-        await state.update_data(when=None)
+    if current_state in {
+        AddGameFlow.entering_when.state,
+        AddGameFlow.entering_when_time.state,
+        }:
+        await state.update_data(
+            when=None,
+            when_date=None
+        )
         await state.set_state(AddGameFlow.entering_location)
         text = "Где проходит игра? (или нажми «Пропустить»):"
         kb = skip_kb()
@@ -494,7 +657,7 @@ async def wizard_skip(cq: CallbackQuery, state: FSMContext):
     elif current_state == AddGameFlow.entering_people_capacity.state:
         await state.update_data(people_capacity=None)
         await state.set_state(AddGameFlow.entering_max_per_team)
-        text = "Макс. людей <b>в одной команде</b>? Введи число или нажми «Пропустить»:"
+        text = "Максимум игроков <b>в одной команде</b>? Введи число или нажми «Пропустить»:"
         kb = skip_kb()
         
     elif current_state == AddGameFlow.entering_max_per_team.state:
@@ -549,3 +712,4 @@ async def wizard_confirm_active(cq: CallbackQuery, state: FSMContext):
         
     await state.clear()
     await cq.answer("Готово")
+    

@@ -14,6 +14,7 @@ class EditPlayersFlow(StatesGroup):
 class AddGameFlow(StatesGroup):
     entering_title = State()
     entering_when = State()
+    entering_when_time = State()
     entering_location = State()
     entering_teams_capacity = State()
     entering_people_capacity = State()

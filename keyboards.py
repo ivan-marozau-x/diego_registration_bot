@@ -101,6 +101,16 @@ def admin_teams_list_kb(pairs: list[tuple[int, str]], game_id: int) -> InlineKey
     )
     return kb.as_markup()
 
+def time_kb() -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="19:00 (по умолчанию)", callback_data="time:19:00")
+    kb.button(text="✍️ Ввести вручную", callback_data="time:manual")
+    kb.button(text="❌ Отмена", callback_data="cancel")
+    kb.adjust(1, 1, 1)
+    return kb.as_markup()
+    
+    
+
 def skip_kb() -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="⏭ Пропустить", callback_data="wiz:skip")
